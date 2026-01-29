@@ -1,16 +1,20 @@
 /* =============================================================================
-  js/db.js — Firestore CRUD (events) — vPRO++
+  js/db.js — Firestore CRUD (events) — vPRO++++ (ASSIGNEE + RECURRENCE + FAST UPSERT)
   -----------------------------------------------------------------------------
   ✅ create/update/softDelete/restore
   ✅ get + subscribe por rango (month-friendly)
-  ✅ upsertMany (import) con sourceHash anti-duplicados
-  ✅ Menos fragilidad con índices: rango usa SOLO orderBy(dateStart)
+  ✅ upsertMany (import) con sourceHash anti-duplicados (optimizado con where-in)
+  ✅ Rango usa SOLO orderBy(dateStart)
 
-  Mejoras vPRO++:
-  - Validación ISO más robusta
-  - Normalización tolerante (update puede ser parcial si quieres)
-  - Comparación de cambios real (no updates inútiles)
-  - Mapper consistente para UI
+  Mejoras vPRO++++:
+  - Campos nuevos:
+      - assignedTo (persona asignada)
+      - recurrence ("", "weekly", "monthly")  // simple y útil
+  - Update parcial real: merge con existing, valida lo mínimo
+  - Evita updates inútiles (comparación real)
+  - findManyBySourceHash: resuelve hashes en bloques (hasta 10 por query)
+  - upsertMany: menos lecturas, más velocidad, menos drama
+  - Normalización más robusta + aliases tolerantes desde UI
 ============================================================================= */
 
 import { db, serverTimestamp, Timestamp } from "./firebase.js";
@@ -39,6 +43,7 @@ const EVENTS_COL = collection(db, "events");
    Const / helpers
 ========================= */
 const ALLOWED_STATUS = new Set(["pending", "done", "cancelled"]);
+const ALLOWED_RECURRENCE = new Set(["", "weekly", "monthly"]); // simple a propósito
 
 /** Validación simple yyyy-mm-dd (y fecha real) */
 function isValidISODate(dateISO) {
@@ -50,16 +55,29 @@ function isValidISODate(dateISO) {
   return dt.getFullYear() === y && (dt.getMonth() + 1) === m && dt.getDate() === d;
 }
 
-/** Normaliza status */
 function normalizeStatus(raw) {
   let st = normText(raw || "pending") || "pending";
   if (!ALLOWED_STATUS.has(st)) st = "pending";
   return st;
 }
 
-/** Compara strings con null safety */
+function normalizeRecurrence(raw) {
+  const r = normText(raw || "");
+  return ALLOWED_RECURRENCE.has(r) ? r : "";
+}
+
+/** Null-safe string compare */
 function sameStr(a, b) {
   return String(a ?? "") === String(b ?? "");
+}
+
+/** Pequeña ayuda: ignora undefined y deja null/"" explícitos */
+function pickDefined(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
 }
 
 /* =========================
@@ -85,20 +103,58 @@ export function toDateISO(value) {
    Normalizador de evento
    - strict: exige campos obligatorios (para create)
    - tolerant: rellena con fallback (para update/upsert)
+   - soporta aliases desde UI para no romper
 ========================= */
+function extractAssignedTo(input = {}, fallback = {}) {
+  // soporta nombres alternos para no romper si UI cambia un id/prop
+  const val =
+    input.assignedTo ??
+    input.assignee ??
+    input.assigned ??
+    fallback.assignedTo ??
+    fallback.assignee ??
+    "";
+  return normText(val || "");
+}
+
+function extractRecurrence(input = {}, fallback = {}) {
+  const raw =
+    input.recurrence ??
+    input.repeat ??
+    input.repetition ??
+    fallback.recurrence ??
+    "";
+  return normalizeRecurrence(raw || "");
+}
+
+function extractDateISO(input = {}, fallback = {}) {
+  // Soporta dateISO, date, dateStr...
+  const raw =
+    input.dateISO ??
+    input.date ??
+    input.dateStr ??
+    fallback.dateISO ??
+    fallback.date ??
+    "";
+  return normText(raw || "");
+}
+
 function normalizeEventInputStrict(input = {}) {
   const title = normText(input.title);
   const category = normText(input.category);
   const notes = normText(input.notes || "");
   const status = normalizeStatus(input.status);
-  const dateISO = normText(input.dateISO || input.date || "");
+  const dateISO = extractDateISO(input, {});
+
+  const assignedTo = extractAssignedTo(input, {});
+  const recurrence = extractRecurrence(input, {});
 
   if (!title) throw new Error("El título es obligatorio.");
   if (!category) throw new Error("La categoría es obligatoria.");
   if (!dateISO) throw new Error("La fecha es obligatoria.");
   if (!isValidISODate(dateISO)) throw new Error("Fecha inválida. Usa yyyy-mm-dd.");
 
-  return { title, category, status, notes, dateISO };
+  return { title, category, status, notes, dateISO, assignedTo, recurrence };
 }
 
 /**
@@ -110,21 +166,25 @@ function normalizeEventInputTolerant(input = {}, fallback = {}) {
   const category = normText(input.category ?? fallback.category);
   const notes = normText((input.notes ?? fallback.notes) || "");
   const status = normalizeStatus(input.status ?? fallback.status ?? "pending");
-  const dateISO = normText(input.dateISO ?? input.date ?? fallback.dateISO ?? "");
+  const dateISO = extractDateISO(input, fallback);
+
+  const assignedTo = extractAssignedTo(input, fallback);
+  const recurrence = extractRecurrence(input, fallback);
 
   if (!title) throw new Error("El título es obligatorio.");
   if (!category) throw new Error("La categoría es obligatoria.");
   if (!dateISO) throw new Error("La fecha es obligatoria.");
   if (!isValidISODate(dateISO)) throw new Error("Fecha inválida. Usa yyyy-mm-dd.");
 
-  return { title, category, status, notes, dateISO };
+  return { title, category, status, notes, dateISO, assignedTo, recurrence };
 }
 
 /* =========================
    CREATE
 ========================= */
 export async function createEvent(input, userEmail) {
-  const { title, category, status, notes, dateISO } = normalizeEventInputStrict(input);
+  const { title, category, status, notes, dateISO, assignedTo, recurrence } =
+    normalizeEventInputStrict(input);
 
   const email = normText(userEmail || "");
 
@@ -133,12 +193,18 @@ export async function createEvent(input, userEmail) {
     category,
     status,
     notes,
+
+    assignedTo,   // 👈 NUEVO
+    recurrence,   // 👈 NUEVO ("", "weekly", "monthly")
+
     dateStart: dateISOToTimestamp(dateISO),
     dateISO, // redundante a propósito: facilita filtros/UI
+
     createdBy: email,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     updatedBy: email,
+
     deletedAt: null,
 
     // import/metadata opcional
@@ -153,6 +219,7 @@ export async function createEvent(input, userEmail) {
 /* =========================
    UPDATE
    - tolera input parcial: mezcla con evento existente si hace falta
+   - evita escribir si no cambia nada real
 ========================= */
 export async function updateEvent(eventId, input, userEmail) {
   const id = normText(eventId);
@@ -160,37 +227,39 @@ export async function updateEvent(eventId, input, userEmail) {
 
   const email = normText(userEmail || "");
 
-  // Para soportar update parcial, traemos el documento actual
   const ref = doc(db, "events", id);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("El evento no existe o fue eliminado.");
 
   const existing = mapEventDoc(snap);
-
   const incoming = normalizeEventInputTolerant(input, existing);
 
-  const patch = {
+  const patch = pickDefined({
     title: incoming.title,
     category: incoming.category,
     status: incoming.status,
     notes: incoming.notes,
+
+    assignedTo: incoming.assignedTo,
+    recurrence: incoming.recurrence,
+
     dateStart: dateISOToTimestamp(incoming.dateISO),
     dateISO: incoming.dateISO,
+
     updatedAt: serverTimestamp(),
     updatedBy: email
-  };
+  });
 
-  // Evita escribir si realmente no cambió nada (ahorra cuotas)
   const changed =
     !sameStr(existing.title, patch.title) ||
     !sameStr(existing.category, patch.category) ||
     !sameStr(existing.status, patch.status) ||
     !sameStr(existing.notes, patch.notes) ||
-    !sameStr(existing.dateISO, patch.dateISO);
+    !sameStr(existing.dateISO, patch.dateISO) ||
+    !sameStr(existing.assignedTo, patch.assignedTo) ||
+    !sameStr(existing.recurrence, patch.recurrence);
 
-  if (!changed) {
-    return { id, ...existing, _skipped: true };
-  }
+  if (!changed) return { id, ...existing, _skipped: true };
 
   await updateDoc(ref, patch);
   return { id, ...existing, ...patch };
@@ -252,6 +321,8 @@ export async function getEvent(eventId) {
    - orderBy SOLO dateStart (menos índices)
 ========================= */
 function buildRangeQuery(fromDate, toDate) {
+  if (!fromDate || !toDate) throw new Error("fromDate y toDate son requeridos");
+
   const from = Timestamp.fromDate(startOfDay(fromDate));
   const to = Timestamp.fromDate(endOfDay(toDate));
 
@@ -293,22 +364,49 @@ export function subscribeEventsInRange(fromDate, toDate, cb, onError) {
 }
 
 /* =========================
-   Import helper: buscar por sourceHash
-   (para evitar duplicados al importar TSV)
+   Import helper: buscar por sourceHash (single)
 ========================= */
 export async function findEventBySourceHash(sourceHash) {
   const sh = normText(sourceHash);
   if (!sh) return null;
 
-  const q = query(
-    EVENTS_COL,
-    where("sourceHash", "==", sh),
-    limit(1)
-  );
-
+  const q = query(EVENTS_COL, where("sourceHash", "==", sh), limit(1));
   const snaps = await getDocs(q);
   if (snaps.empty) return null;
   return mapEventDoc(snaps.docs[0]);
+}
+
+/* =========================
+   Import helper: buscar MUCHOS sourceHash (fast)
+   - Firestore "in" permite máx 10 valores por query
+========================= */
+export async function findManyBySourceHash(hashes = []) {
+  const list = (Array.isArray(hashes) ? hashes : [])
+    .map(h => normText(h))
+    .filter(Boolean);
+
+  const out = new Map(); // hash -> event
+  if (!list.length) return out;
+
+  const uniq = Array.from(new Set(list));
+
+  for (let i = 0; i < uniq.length; i += 10) {
+    const chunk = uniq.slice(i, i + 10);
+
+    const q = query(
+      EVENTS_COL,
+      where("sourceHash", "in", chunk),
+      limit(10)
+    );
+
+    const snaps = await getDocs(q);
+    for (const d of snaps.docs) {
+      const ev = mapEventDoc(d);
+      if (ev.sourceHash) out.set(ev.sourceHash, ev);
+    }
+  }
+
+  return out;
 }
 
 /* =========================
@@ -316,18 +414,29 @@ export async function findEventBySourceHash(sourceHash) {
    - Si existe sourceHash: update
    - Si no existe: create
    - Skip si no cambia nada real
+   - Optimizado: resuelve existing por hash en bloque
 ========================= */
 export async function upsertMany(events = [], userEmail) {
   const results = { created: 0, updated: 0, skipped: 0, errors: 0 };
   const out = [];
 
   const email = normText(userEmail || "");
+  const items = Array.isArray(events) ? events : [];
 
-  for (const raw of (Array.isArray(events) ? events : [])) {
+  const hashes = items.map(r => normText(r?.sourceHash || "")).filter(Boolean);
+  let existingByHash = new Map();
+
+  try {
+    existingByHash = await findManyBySourceHash(hashes);
+  } catch (e) {
+    console.warn("findManyBySourceHash failed, fallback to per-item:", e);
+    existingByHash = new Map();
+  }
+
+  for (const raw of items) {
     try {
       const sourceHash = normText(raw?.sourceHash || "");
 
-      // Sin hash => create normal (strict)
       if (!sourceHash) {
         const created = await createEvent(raw, email);
         results.created++;
@@ -335,7 +444,11 @@ export async function upsertMany(events = [], userEmail) {
         continue;
       }
 
-      const existing = await findEventBySourceHash(sourceHash);
+      let existing = existingByHash.get(sourceHash) || null;
+      if (!existing) {
+        existing = await findEventBySourceHash(sourceHash);
+        if (existing) existingByHash.set(sourceHash, existing);
+      }
 
       if (!existing) {
         const created = await createEvent({ ...raw, sourceHash }, email);
@@ -344,7 +457,6 @@ export async function upsertMany(events = [], userEmail) {
         continue;
       }
 
-      // Tolerante: rellena lo que falte con existing
       const incoming = normalizeEventInputTolerant(raw, existing);
 
       const changed =
@@ -352,7 +464,9 @@ export async function upsertMany(events = [], userEmail) {
         !sameStr(incoming.category, existing.category) ||
         !sameStr(incoming.status, existing.status) ||
         !sameStr(incoming.notes, existing.notes) ||
-        !sameStr(incoming.dateISO, existing.dateISO);
+        !sameStr(incoming.dateISO, existing.dateISO) ||
+        !sameStr(incoming.assignedTo, existing.assignedTo) ||
+        !sameStr(incoming.recurrence, existing.recurrence);
 
       if (!changed) {
         results.skipped++;
@@ -389,6 +503,9 @@ function mapEventDoc(docSnap) {
     category: data.category || "",
     status: data.status || "pending",
     notes: data.notes || "",
+
+    assignedTo: data.assignedTo || "",
+    recurrence: data.recurrence || "",
 
     dateStart,
     dateISO,
