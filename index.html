@@ -1,55 +1,68 @@
 <!doctype html>
-<html lang="es">
+<html lang="es-CO">
 <head>
   <meta charset="utf-8" />
-  <title>Calendario · Musicala</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="light" />
 
-  <!-- Estilos base -->
+  <title>Calendario · Musicala</title>
+  <meta name="description" content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios." />
+  <meta name="color-scheme" content="light" />
+  <meta name="theme-color" content="#ffffff" />
+
+  <!-- Estilos -->
   <link rel="stylesheet" href="styles.css" />
 
-  <!-- Fuente (Manual Musicala: Roboto / fallback Inter si ya la usas) -->
+  <!-- Fuente -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
     href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;600;800;900&display=swap"
     rel="stylesheet"
   />
+
+  <!-- Pequeñas ayudas -->
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
 </head>
 
 <body>
+  <!-- Accesibilidad: se ve SOLO con teclado (CSS controla) -->
+  <a class="skip-link" href="#app">Saltar al contenido</a>
+
+  <noscript>
+    <div style="max-width:900px;margin:16px auto;padding:14px;border:1px solid rgba(15,23,42,.14);border-radius:14px;background:#fff;">
+      <strong>Este calendario necesita JavaScript.</strong>
+      <div style="margin-top:6px;color:#334155;">
+        Actívalo en tu navegador para poder iniciar sesión, cargar eventos y usar el calendario.
+      </div>
+    </div>
+  </noscript>
+
   <!-- ======================
        HEADER
   ======================= -->
-  <header class="header">
+  <header class="header" role="banner">
     <div class="header-left">
-      <!-- Marca -->
-      <div class="brand">
-        <img
-          src="./logo.png"
-          alt="Musicala"
-          class="brand-logo"
-        />
+      <div class="brand" aria-label="Musicala">
+        <img src="./logo.png" alt="Musicala" class="brand-logo" />
         <div class="brand-text">
           <span class="brand-title">Calendario</span>
           <span class="brand-subtitle">Musicala</span>
         </div>
       </div>
 
-      <span id="userEmail" class="user-email hidden"></span>
+      <span id="userEmail" class="user-email hidden" aria-live="polite"></span>
     </div>
 
-    <div class="header-right">
-      <button id="btnLogin" class="btn primary">Iniciar sesión</button>
-      <button id="btnLogout" class="btn ghost hidden">Salir</button>
+    <div class="header-right" aria-label="Sesión">
+      <button id="btnLogin" class="btn primary" type="button">Iniciar sesión</button>
+      <button id="btnLogout" class="btn ghost hidden" type="button">Salir</button>
     </div>
   </header>
 
   <!-- ======================
        BLOQUE NO AUTORIZADO
   ======================= -->
-  <section id="unauthorized" class="unauthorized hidden">
+  <section id="unauthorized" class="unauthorized hidden" role="status" aria-live="polite">
     <p>
       Este calendario es de uso interno.<br />
       Si crees que deberías tener acceso, revisa el correo con el que iniciaste sesión.
@@ -59,14 +72,14 @@
   <!-- ======================
        APP PRINCIPAL
   ======================= -->
-  <main id="app" class="app hidden">
+  <main id="app" class="app hidden" role="main">
 
     <!-- Toolbar -->
-    <section class="toolbar">
+    <section class="toolbar" aria-label="Navegación de mes">
       <div class="toolbar-left">
-        <button id="btnPrevMonth" class="btn ghost" type="button">◀</button>
-        <h2 id="currentMonth">Mes Año</h2>
-        <button id="btnNextMonth" class="btn ghost" type="button">▶</button>
+        <button id="btnPrevMonth" class="btn ghost" type="button" aria-label="Mes anterior">◀</button>
+        <h2 id="currentMonth" aria-live="polite">Mes Año</h2>
+        <button id="btnNextMonth" class="btn ghost" type="button" aria-label="Mes siguiente">▶</button>
       </div>
 
       <div class="toolbar-right">
@@ -95,49 +108,70 @@
     </section>
 
     <!-- ======================
-         Búsqueda + Modo vista
+         Búsqueda + Vista
     ======================= -->
     <section class="controls" aria-label="Controles">
       <div class="controls-left">
+        <label class="sr-only" for="searchEvents">Buscar eventos</label>
         <input
           id="searchEvents"
           type="text"
-          placeholder="Buscar por título o notas…"
+          placeholder="Buscar por título, notas o responsable…"
           autocomplete="off"
           spellcheck="false"
+          inputmode="search"
         />
       </div>
 
       <div class="controls-right" role="tablist" aria-label="Vista">
-        <button id="btnViewMonth" class="seg active" type="button" aria-selected="true">
+        <button id="btnViewMonth" class="seg active" type="button" aria-selected="true" role="tab">
           Mes
         </button>
-        <button id="btnViewList" class="seg" type="button" aria-selected="false">
+        <button id="btnViewList" class="seg" type="button" aria-selected="false" role="tab">
           Lista
         </button>
       </div>
     </section>
 
-    <!-- Filtros -->
-    <section class="filters">
-      <select id="filterCategory">
-        <option value="">Todas las categorías</option>
-      </select>
+    <!-- ======================
+         Filtros
+         ✅ IDs alineados con ui.js:
+            filterCategory / filterStatus / filterAssignedTo
+    ======================= -->
+    <section class="filters" aria-label="Filtros">
+      <div class="filter-row">
+        <div class="filter-field">
+          <label for="filterCategory">Filtrar por categoría</label>
+          <select id="filterCategory">
+            <option value="">Todas las categorías</option>
+          </select>
+        </div>
 
-      <select id="filterStatus">
-        <option value="">Todos los estados</option>
-        <option value="pending">Pendiente</option>
-        <option value="done">Hecho</option>
-        <option value="cancelled">Cancelado</option>
-      </select>
+        <div class="filter-field">
+          <label for="filterStatus">Filtrar por estado</label>
+          <select id="filterStatus">
+            <option value="">Todos los estados</option>
+            <option value="pending">Pendiente</option>
+            <option value="done">Hecho</option>
+            <option value="cancelled">Cancelado</option>
+          </select>
+        </div>
+
+        <div class="filter-field">
+          <label for="filterAssignedTo">Filtrar por responsable</label>
+          <select id="filterAssignedTo">
+            <option value="">Todas las personas</option>
+          </select>
+        </div>
+      </div>
     </section>
 
     <!-- ======================
          Vista Mes (Calendario)
     ======================= -->
-    <section class="calendar" id="monthView">
-      <div class="calendar-grid" id="calendarGrid">
-        <!-- días y eventos se renderizan por JS -->
+    <section class="calendar" id="monthView" aria-label="Calendario mensual">
+      <div class="calendar-grid" id="calendarGrid" role="grid" aria-label="Cuadrícula del calendario">
+        <!-- render por JS -->
       </div>
     </section>
 
@@ -147,9 +181,11 @@
     <section class="list-view hidden" id="listView" aria-label="Lista de eventos">
       <div class="list-head">
         <h3 id="listTitle">Eventos</h3>
+        <div class="list-meta" id="listMeta" aria-live="polite"></div>
       </div>
+
       <div class="list-body" id="listBody">
-        <!-- items se renderizan por JS -->
+        <!-- render por JS -->
       </div>
     </section>
 
@@ -157,39 +193,81 @@
 
   <!-- ======================
        MODAL EVENTO
+       ✅ IDs alineados con ui.js:
+          eventAssignedTo + eventRecurrence
   ======================= -->
-  <div id="eventModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div
+    id="eventModal"
+    class="modal hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="modalTitle"
+    aria-describedby="modalDesc"
+  >
     <div class="modal-content">
-      <h3 id="modalTitle">Nuevo evento</h3>
+      <div class="modal-head">
+        <h3 id="modalTitle">Nuevo evento</h3>
+        <p id="modalDesc" class="muted">Crea o edita una tarea del calendario.</p>
+      </div>
 
-      <form id="eventForm">
+      <form id="eventForm" novalidate>
         <label>
           Título
-          <input type="text" id="eventTitle" required />
+          <input type="text" id="eventTitle" required maxlength="120" />
         </label>
 
-        <label>
-          Categoría
-          <select id="eventCategory" required></select>
-        </label>
+        <div class="form-2col">
+          <label>
+            Categoría
+            <select id="eventCategory" required></select>
+          </label>
 
-        <label>
-          Fecha
-          <input type="date" id="eventDate" required />
-        </label>
+          <label>
+            Fecha
+            <input type="date" id="eventDate" required />
+          </label>
+        </div>
 
-        <label>
-          Estado
-          <select id="eventStatus">
-            <option value="pending">Pendiente</option>
-            <option value="done">Hecho</option>
-            <option value="cancelled">Cancelado</option>
-          </select>
-        </label>
+        <div class="form-2col">
+          <label>
+            Estado
+            <select id="eventStatus">
+              <option value="pending">Pendiente</option>
+              <option value="done">Hecho</option>
+              <option value="cancelled">Cancelado</option>
+            </select>
+          </label>
+
+          <label>
+            Responsable
+            <select id="eventAssignedTo">
+              <option value="">Sin asignar</option>
+              <!-- ui.js rellena opciones (idealmente desde ASSIGNEES + existentes) -->
+            </select>
+          </label>
+        </div>
+
+        <div class="form-2col">
+          <label>
+            Repetición
+            <select id="eventRecurrence">
+              <option value="">No repetir</option>
+              <option value="weekly">Semanal</option>
+              <option value="monthly">Mensual</option>
+            </select>
+          </label>
+
+          <div aria-hidden="true"></div>
+        </div>
 
         <label>
           Notas
-          <textarea id="eventNotes" rows="3"></textarea>
+          <textarea
+            id="eventNotes"
+            rows="3"
+            maxlength="1200"
+            placeholder="Detalles, links, contexto…"
+          ></textarea>
         </label>
 
         <div class="modal-actions">
@@ -201,7 +279,7 @@
             <button type="button" id="btnCancelModal" class="btn ghost">
               Cancelar
             </button>
-            <button type="submit" class="btn primary">
+            <button type="submit" class="btn primary" id="btnSaveEvent">
               Guardar
             </button>
           </div>
@@ -210,19 +288,18 @@
     </div>
   </div>
 
-  <!-- ======================
-       OVERLAY MODAL
-  ======================= -->
-  <div id="modalOverlay" class="overlay hidden"></div>
+  <!-- Overlay -->
+  <div id="modalOverlay" class="overlay hidden" aria-hidden="true"></div>
+
+  <!-- Toast host (si no se usa, no molesta) -->
+  <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 
   <!-- ======================
        SCRIPTS
   ======================= -->
-  <!-- Firebase core -->
   <script type="module" src="js/firebase.js"></script>
   <script type="module" src="js/auth.js"></script>
 
-  <!-- App -->
   <script type="module" src="js/constants.js"></script>
   <script type="module" src="js/utils.js"></script>
   <script type="module" src="js/db.js"></script>
