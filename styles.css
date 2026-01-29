@@ -1,13 +1,15 @@
 /* =============================================================================
-  styles.css — Calendario Musicala (vPRO LIGHT) — Brand Edition PRO++ (Search Focus)
+  styles.css — Calendario · Musicala (vPRO LIGHT) — Brand Edition PRO+++ (Ultra)
   -----------------------------------------------------------------------------
-  - UI clara, moderna, rápida (no dark)
-  - Header con logo + marca Musicala
-  - Overview (Hoy / Próximos 7)
-  - Controles: buscador PRO + segmented (Mes/Lista)
-  - Calendar grid 7 columnas + headers
-  - Chips por categoría/estado (colores desde JS)
-  - Modal limpio con scroll seguro + bloque “Eventos del día”
+  ✅ 100% light (regla Musicala)
+  ✅ Header premium + logo + acciones
+  ✅ Overview (Hoy / Próximos 7) con items clicables
+  ✅ Controles: buscador PRO + segmented + filtros (incluye Asignado)
+  ✅ Calendar grid estable + chips compactos + "@persona"
+  ✅ SIN "+N más": se ven TODOS los eventos (scroll interno si se desborda)
+  ✅ Full width: calendario a lo ancho de pantalla
+  ✅ Modal limpio + “Eventos del día” + scroll seguro
+  ✅ Toast (si existe #toastHost en HTML)
 ============================================================================= */
 
 /* =========================
@@ -15,16 +17,16 @@
 ========================= */
 :root{
   /* Manual Musicala — primarios */
-  --mozart:#0C41C4;     /* Azul Mozart */
-  --bach:#220A63;       /* Azul Bach */
-  --beethoven:#680DBF;  /* Violeta Beethoven */
-  --vivaldi:#5729FF;    /* Violeta Vivaldi */
-  --brahms:#CE0071;     /* Magenta Brahms */
+  --mozart:#0C41C4;
+  --bach:#220A63;
+  --beethoven:#680DBF;
+  --vivaldi:#5729FF;
+  --brahms:#CE0071;
 
   /* Manual Musicala — secundarios */
-  --wagner:#0C0A1E;      /* oscuro */
-  --haydn:#E6E8E8;       /* gris */
-  --debussy:#F9F9F9;     /* casi blanco */
+  --wagner:#0C0A1E;
+  --haydn:#E6E8E8;
+  --debussy:#F9F9F9;
 
   /* UI light */
   --bg: var(--debussy);
@@ -53,13 +55,25 @@
   --shadow3:0 6px 16px rgba(15,23,42,.08);
 
   --focus:0 0 0 4px rgba(12,65,196,.18);
-  --focus-strong:0 0 0 4px rgba(12,65,196,.24), 0 8px 24px rgba(12,65,196,.14);
+  --focus-strong:0 0 0 4px rgba(12,65,196,.24), 0 12px 30px rgba(12,65,196,.14);
 
   --header-bg: rgba(255,255,255,.86);
   --header-blur: 10px;
 
-  /* targets */
-  --tap: 44px; /* mínimo táctil */
+  --tap: 44px;
+
+  /* density */
+  --gap: 12px;
+  --chip-pad: 7px 10px;
+
+  /* calendar sizing */
+  --cal-min-col: 150px;     /* ancho mínimo por día en pantallas pequeñas (para scroll horizontal) */
+  --day-min-h: 128px;       /* alto mínimo de cada día */
+  --day-max-h: 220px;       /* alto máximo visible antes de scroll interno (para ver "todo" sin truncar) */
+
+  /* gradient helpers */
+  --g1: radial-gradient(1100px 600px at 10% -10%, rgba(12,65,196,.10), transparent 55%);
+  --g2: radial-gradient(900px 520px at 100% 0%, rgba(206,0,113,.10), transparent 55%);
 }
 
 /* =========================
@@ -72,10 +86,7 @@ body{
   margin:0;
   font-family: Roboto, Inter, system-ui, -apple-system, Segoe UI, Ubuntu, Arial, sans-serif;
   color:var(--ink);
-  background:
-    radial-gradient(1100px 600px at 10% -10%, rgba(12,65,196,.10), transparent 55%),
-    radial-gradient(900px 520px at 100% 0%, rgba(206,0,113,.10), transparent 55%),
-    var(--bg);
+  background: var(--g1), var(--g2), var(--bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -83,11 +94,10 @@ body{
 a{ color:inherit; }
 ::selection{ background:rgba(12,65,196,.18); }
 
-/* Focus bonito y consistente */
 :focus{ outline:none; }
 :focus-visible{ box-shadow: var(--focus); border-color: rgba(12,65,196,.35) !important; }
 
-/* Scrollbars (suave, sin hacer payasadas) */
+/* Scrollbars suaves */
 *{
   scrollbar-width: thin;
   scrollbar-color: rgba(15,23,42,.25) rgba(15,23,42,.06);
@@ -109,6 +119,48 @@ a{ color:inherit; }
 .hidden{ display:none !important; }
 .modal-open{ overflow:hidden; }
 .muted{ color: var(--muted); }
+.small{ font-size: 12px; color: var(--muted); }
+
+.sr-only{
+  position:absolute !important;
+  width:1px !important;
+  height:1px !important;
+  padding:0 !important;
+  margin:-1px !important;
+  overflow:hidden !important;
+  clip:rect(0,0,0,0) !important;
+  white-space:nowrap !important;
+  border:0 !important;
+}
+
+/* Skip link: NO se muestra a menos que uses teclado */
+.skip-link{
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  z-index: 999;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(12,65,196,.25);
+  background: rgba(255,255,255,.92);
+  box-shadow: var(--shadow3);
+  font-weight: 900;
+  color: var(--bach);
+  transform: translateY(-140%);
+  transition: transform .18s ease;
+}
+.skip-link:focus{
+  transform: translateY(0);
+  box-shadow: var(--focus-strong);
+}
+
+.kbd{
+  display:inline-flex; align-items:center; justify-content:center;
+  padding: 2px 6px; border-radius: 8px;
+  border: 1px solid rgba(15,23,42,.12);
+  background: rgba(255,255,255,.8);
+  font-weight: 900; font-size: 11px; color: var(--bach);
+}
 
 /* =========================
    Header
@@ -135,7 +187,6 @@ a{ color:inherit; }
   gap:12px;
   min-width: 0;
 }
-
 .header-right{
   display:flex;
   align-items:center;
@@ -143,7 +194,6 @@ a{ color:inherit; }
   flex: 0 0 auto;
 }
 
-/* Brand (logo + texto) */
 .brand{
   display:flex;
   align-items:center;
@@ -152,7 +202,7 @@ a{ color:inherit; }
 }
 
 .brand-logo{
-  height: 44px;       /* base móvil */
+  height: 44px;
   width: auto;
   object-fit: contain;
   flex: 0 0 auto;
@@ -160,10 +210,10 @@ a{ color:inherit; }
 }
 
 @media (min-width: 640px){
-  .brand-logo{ height: 52px; } /* >= 50px recomendado */
+  .brand-logo{ height: 52px; }
 }
 @media (min-width: 1024px){
-  .brand-logo{ height: 64px; } /* pro sin exagerar */
+  .brand-logo{ height: 64px; }
 }
 
 .brand-text{
@@ -186,7 +236,6 @@ a{ color:inherit; }
   font-size: 14px;
 }
 
-/* Email */
 .user-email{
   font-size:12px;
   color:var(--muted);
@@ -209,14 +258,14 @@ a{ color:inherit; }
   min-height: var(--tap);
   padding:10px 12px;
 
-  font-weight:800;
+  font-weight:900;
   font-size:13px;
   cursor:pointer;
+
   transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease, filter .15s ease;
   box-shadow: 0 1px 0 rgba(15,23,42,.05);
   user-select:none;
 }
-
 .btn:hover{
   border-color: rgba(15,23,42,.22);
   box-shadow: var(--shadow2);
@@ -224,7 +273,6 @@ a{ color:inherit; }
 .btn:active{ transform: translateY(1px); }
 .btn:focus-visible{ box-shadow: var(--focus); }
 
-/* Primary = gradiente Musicala */
 .btn.primary{
   background: linear-gradient(135deg, var(--mozart), var(--bach));
   color:#fff;
@@ -232,12 +280,11 @@ a{ color:inherit; }
 }
 .btn.primary:hover{ filter: brightness(1.03); }
 
-/* Ghost */
 .btn.ghost{
   background: rgba(255,255,255,.70);
 }
+.btn.ghost:hover{ background: rgba(255,255,255,.92); }
 
-/* Danger */
 .btn.danger{
   background: rgba(239,68,68,.10);
   border-color: rgba(239,68,68,.25);
@@ -250,15 +297,21 @@ a{ color:inherit; }
 
 /* =========================
    Layout main
+   - Full width: no más "caja angosta".
 ========================= */
 .app{
-  max-width: 1100px;
+  width: min(1400px, calc(100vw - 32px));
+  max-width: none;
   margin: 0 auto;
-  padding: 18px;
+  padding: 18px 0 22px;
+}
+
+@media (min-width: 1440px){
+  .app{ width: min(1600px, calc(100vw - 48px)); }
 }
 
 .unauthorized{
-  max-width: 900px;
+  width: min(980px, calc(100vw - 32px));
   margin: 16px auto;
   padding: 16px 18px;
   border:1px solid rgba(239,68,68,.25);
@@ -310,10 +363,10 @@ a{ color:inherit; }
    Overview (Hoy / Próximos 7)
 ========================= */
 .overview{
-  margin-top: 12px;
+  margin-top: var(--gap);
   display:grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--gap);
 }
 
 .overview-card{
@@ -355,22 +408,30 @@ a{ color:inherit; }
   color: var(--ink);
 }
 
-.overview-body .muted{
-  font-weight: 800;
-  font-size: 12.5px;
-  color: var(--muted);
-}
-
-/* Items genéricos si JS pinta listas */
+/* Overview item (ui.js) */
 .ov-item{
+  width: 100%;
+  text-align:left;
   display:flex;
   align-items:flex-start;
   gap:10px;
+
   padding: 10px 10px;
   border:1px solid rgba(15,23,42,.10);
   background: rgba(255,255,255,.78);
   border-radius: 14px;
+  cursor:pointer;
+
+  transition: box-shadow .15s ease, border-color .15s ease, transform .08s ease, background .15s ease;
 }
+.ov-item:hover{
+  border-color: rgba(15,23,42,.18);
+  background: rgba(255,255,255,.92);
+  box-shadow: var(--shadow3);
+}
+.ov-item:active{ transform: translateY(1px); }
+.ov-item:focus-visible{ box-shadow: var(--focus); }
+
 .ov-dot{
   width:10px; height:10px;
   border-radius:999px;
@@ -378,27 +439,34 @@ a{ color:inherit; }
   margin-top: 4px;
   flex: 0 0 auto;
 }
+
+.ov-text{ min-width:0; display:flex; flex-direction:column; gap:2px; }
+.ov-date{
+  font-weight: 900;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing:.2px;
+}
 .ov-title{
   font-weight: 900;
   font-size: 12.5px;
   line-height: 1.15;
 }
-.ov-sub{
-  margin-top: 2px;
-  font-weight: 800;
+.ov-who{
+  font-weight: 900;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--mozart);
 }
 
 /* =========================
    Controls (Buscador + Segmented)
 ========================= */
 .controls{
-  margin-top: 12px;
+  margin-top: var(--gap);
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap: 12px;
+  gap: var(--gap);
 
   padding: 12px 14px;
   background: var(--panel);
@@ -419,7 +487,7 @@ a{ color:inherit; }
   gap: 10px;
 }
 
-/* ===== Buscador PRO (la joya) ===== */
+/* Buscador PRO */
 #searchEvents{
   width: 100%;
   min-height: 48px;
@@ -428,13 +496,12 @@ a{ color:inherit; }
 
   border: 1px solid rgba(15,23,42,.14);
   background:
-    /* icono lupa (svg inline) */
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.35-4.35'/%3E%3C/svg%3E") 16px 50% no-repeat,
     linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.70));
   color: var(--ink);
 
   font-size: 13.5px;
-  font-weight: 800;
+  font-weight: 900;
   letter-spacing: .1px;
 
   box-shadow:
@@ -445,7 +512,7 @@ a{ color:inherit; }
 
 #searchEvents::placeholder{
   color: rgba(102,112,133,.85);
-  font-weight: 800;
+  font-weight: 900;
 }
 
 #searchEvents:hover{
@@ -466,7 +533,7 @@ a{ color:inherit; }
 
 #searchEvents:active{ transform: translateY(1px); }
 
-/* Segmented (Mes / Lista) */
+/* Segmented */
 .seg{
   appearance:none;
   border:1px solid rgba(15,23,42,.14);
@@ -500,13 +567,10 @@ a{ color:inherit; }
 }
 
 /* =========================
-   Filters
+   Filters (versión nueva con labels visibles)
 ========================= */
 .filters{
-  margin-top: 12px;
-  display:flex;
-  gap:10px;
-  flex-wrap: wrap;
+  margin-top: var(--gap);
   padding: 12px 14px;
   background: var(--panel);
   border:1px solid var(--line);
@@ -514,12 +578,28 @@ a{ color:inherit; }
   box-shadow: var(--shadow2);
 }
 
-/* Inputs base (select / date / text / textarea) */
-select, input[type="date"], input[type="text"], textarea{
-  width: auto;
-  min-width: 220px;
-  max-width: 100%;
+.filter-row{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 12px;
+  align-items:end;
+}
 
+.filter-field{
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.filter-field label{
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--muted);
+}
+
+select, input[type="date"], input[type="text"], textarea, input[type="number"]{
+  width: 100%;
   min-height: var(--tap);
   padding: 10px 12px;
 
@@ -528,17 +608,17 @@ select, input[type="date"], input[type="text"], textarea{
   background: var(--panel2);
   color: var(--ink);
   font-size: 13px;
-  font-weight:800;
+  font-weight:900;
   outline:none;
   transition: box-shadow .15s ease, border-color .15s ease, background .15s ease, transform .08s ease;
 }
 
-select:focus, input[type="date"]:focus, input[type="text"]:focus, textarea:focus{
+select:focus, input[type="date"]:focus, input[type="text"]:focus, textarea:focus, input[type="number"]:focus{
   box-shadow: var(--focus);
   border-color: rgba(12,65,196,.35);
   background:#fff;
 }
-select:active, input[type="date"]:active, input[type="text"]:active, textarea:active{
+select:active, input[type="date"]:active, input[type="text"]:active, textarea:active, input[type="number"]:active{
   transform: translateY(1px);
 }
 
@@ -547,11 +627,24 @@ textarea{
   resize: vertical;
 }
 
+/* caret decente */
+select{
+  padding-right: 38px;
+  background-image:
+    linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.70)),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat, no-repeat;
+  background-position: 0 0, right 12px center;
+  background-size: auto, 18px 18px;
+}
+
 /* =========================
    Calendar
+   - Desktop: 7 cols
+   - Mobile: scroll horizontal para ver días (sin reventar)
 ========================= */
 .calendar{
-  margin-top: 12px;
+  margin-top: var(--gap);
   background: var(--panel);
   border:1px solid var(--line);
   border-radius: var(--r);
@@ -559,10 +652,10 @@ textarea{
   overflow: hidden;
 }
 
-/* 7 columnas. Headers incluidos */
+/* Wrapper: permite scroll horizontal solo cuando haga falta */
 .calendar-grid{
   display:grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 
 /* Encabezados días */
@@ -578,7 +671,7 @@ textarea{
 
 /* Celda día */
 .day{
-  min-height: 110px;
+  min-height: var(--day-min-h);
   padding: 10px 10px 8px;
 
   border-right:1px solid var(--line);
@@ -588,7 +681,7 @@ textarea{
   cursor: pointer;
   position: relative;
 
-  transition: background .15s ease, box-shadow .15s ease;
+  transition: background .15s ease, box-shadow .15s ease, transform .08s ease;
 }
 
 .day:nth-child(7n){
@@ -604,6 +697,8 @@ textarea{
   background: rgba(12,65,196,.035);
   box-shadow: inset 0 0 0 1px rgba(12,65,196,.08);
 }
+
+.day:active{ transform: translateY(1px); }
 
 .day.today{
   background:
@@ -636,11 +731,16 @@ textarea{
   background: rgba(15,23,42,.04);
 }
 
-/* Eventos dentro del día */
+/* ✅ Se ven TODOS los eventos:
+   - event-list crece, pero si se pasa del max, scroll interno */
 .event-list{
   display:flex;
   flex-direction: column;
   gap:6px;
+
+  max-height: calc(var(--day-max-h) - 44px); /* 44px aprox header del día */
+  overflow:auto;
+  padding-right: 4px;
 }
 
 /* =========================
@@ -656,11 +756,11 @@ textarea{
   background: rgba(15,23,42,.02);
   color: var(--ink);
 
-  padding: 7px 10px;
+  padding: var(--chip-pad);
   border-radius: 12px;
 
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 900;
 
   cursor:pointer;
   display:flex;
@@ -684,34 +784,39 @@ textarea{
   text-align:center;
   font-weight: 900;
   opacity: .92;
+  flex: 0 0 auto;
 }
 
 .chip-text{
+  min-width: 0;
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
 }
 
-/* "+N más" */
-.chip-more{
-  cursor: pointer;
-  background: rgba(15,23,42,.03);
-  border-style: dashed;
-  border-color: rgba(15,23,42,.16);
-  color: var(--muted);
-}
-.chip-more:hover{
-  background: rgba(12,65,196,.05);
-  border-color: rgba(12,65,196,.20);
+/* @persona */
+.chip-person{
+  flex: 0 0 auto;
+  margin-left:auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(12,65,196,.16);
+  background: rgba(12,65,196,.08);
   color: var(--bach);
-  box-shadow: 0 6px 16px rgba(12,65,196,.08);
+  font-weight: 900;
+  font-size: 11.5px;
+  white-space:nowrap;
 }
 
+/* Si el JS viejo todavía pinta chip-more, lo ocultamos.
+   (mejor que no aparezca “+1 más” nunca) */
+.chip-more{ display:none !important; }
+
 /* =========================
-   List view (si activas “Lista”)
+   List view (vPRO)
 ========================= */
 .list-view{
-  margin-top: 12px;
+  margin-top: var(--gap);
   background: var(--panel);
   border:1px solid var(--line);
   border-radius: var(--r);
@@ -725,6 +830,10 @@ textarea{
   background:
     radial-gradient(520px 240px at 10% 0%, rgba(12,65,196,.08), transparent 60%),
     rgba(15,23,42,.02);
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap: 10px;
 }
 
 .list-head h3{
@@ -732,6 +841,12 @@ textarea{
   font-size: 14.5px;
   font-weight: 900;
   color: var(--bach);
+}
+.list-meta{
+  font-weight: 900;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .list-body{
@@ -741,8 +856,24 @@ textarea{
   gap: 10px;
 }
 
-/* Items genéricos por si el JS pinta cards */
+.list-day{
+  padding: 10px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(15,23,42,.08);
+  background: rgba(15,23,42,.02);
+}
+.list-day-title{
+  font-weight: 900;
+  color: var(--bach);
+  font-size: 12.5px;
+  letter-spacing: .2px;
+}
+
 .list-item{
+  width: 100%;
+  text-align:left;
+  appearance:none;
+
   display:flex;
   align-items:flex-start;
   justify-content: space-between;
@@ -752,43 +883,76 @@ textarea{
   border-radius: 16px;
 
   border: 1px solid rgba(15,23,42,.10);
-  background: rgba(255,255,255,.85);
+  background: rgba(255,255,255,.92);
   box-shadow: 0 1px 0 rgba(15,23,42,.04);
+  cursor:pointer;
+
+  transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
 }
 
 .list-item:hover{
   border-color: rgba(15,23,42,.18);
+  background: #fff;
   box-shadow: var(--shadow3);
 }
+.list-item:active{ transform: translateY(1px); }
+.list-item:focus-visible{ box-shadow: var(--focus); }
 
-.list-item-left{
-  min-width: 0;
-  display:flex;
-  flex-direction: column;
-  gap: 4px;
+.list-dot{
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-top: 5px;
+  flex: 0 0 auto;
 }
 
-.list-item-title{
+.list-main{ min-width:0; display:flex; flex-direction:column; gap:6px; }
+.list-title{
   font-weight: 900;
   font-size: 13px;
   line-height: 1.15;
+  color: var(--ink);
 }
 
-.list-item-meta{
-  font-weight: 800;
-  font-size: 12px;
+.list-sub{
+  display:flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.list-pill{
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(15,23,42,.10);
+  background: rgba(15,23,42,.03);
+  font-weight: 900;
+  font-size: 11.5px;
   color: var(--muted);
 }
+.list-pill.status{
+  background: rgba(12,65,196,.06);
+  border-color: rgba(12,65,196,.14);
+  color: var(--bach);
+}
+.list-pill.who{
+  background: rgba(12,65,196,.08);
+  border-color: rgba(12,65,196,.16);
+  color: var(--bach);
+}
+.list-pill.rec{
+  background: rgba(206,0,113,.08);
+  border-color: rgba(206,0,113,.18);
+  color: var(--wagner);
+}
 
-.list-item-right{
+.list-st{
   flex: 0 0 auto;
-  display:flex;
-  align-items:center;
-  gap: 8px;
+  font-weight: 900;
+  margin-left: 6px;
 }
 
 /* =========================
-   Modal
+   Modal + Overlay
 ========================= */
 #modalOverlay,
 .overlay{
@@ -810,8 +974,8 @@ textarea{
 }
 
 .modal-content{
-  width: min(560px, 100%);
-  max-height: min(78vh, 720px);
+  width: min(640px, 100%);
+  max-height: min(86vh, 820px);
   overflow: auto;
 
   background: var(--panel);
@@ -822,14 +986,21 @@ textarea{
   padding: 16px;
 }
 
-.modal-content h3{
-  margin: 6px 6px 12px;
+.modal-head{
+  padding: 6px 6px 10px;
+}
+.modal-head h3{
+  margin: 0 0 6px;
   font-size: 16px;
   font-weight: 900;
   color: var(--bach);
 }
+.modal-head p{
+  margin:0;
+  font-weight: 800;
+}
 
-/* Bloque “Eventos del día” (inyectado por ui.js) */
+/* Bloque “Eventos del día” (ui.js) */
 .day-peek{
   margin: 0 6px 12px;
   padding: 12px 12px;
@@ -868,51 +1039,46 @@ textarea{
 }
 
 .day-peek-item{
+  width:100%;
+  text-align:left;
+  appearance:none;
+  cursor:pointer;
+
   display:flex;
   align-items:flex-start;
+  justify-content:space-between;
   gap: 10px;
+
   padding: 10px 10px;
   border-radius: 14px;
   border: 1px solid rgba(15,23,42,.10);
-  background: rgba(255,255,255,.82);
-}
+  background: rgba(255,255,255,.90);
 
-.day-peek-pill{
-  flex: 0 0 auto;
-  padding: 6px 8px;
-  border-radius: 999px;
-  font-weight: 900;
-  font-size: 11px;
-  background: rgba(12,65,196,.10);
-  color: var(--bach);
-  border: 1px solid rgba(12,65,196,.18);
+  transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
 }
+.day-peek-item:hover{
+  border-color: rgba(15,23,42,.18);
+  background: #fff;
+  box-shadow: var(--shadow3);
+}
+.day-peek-item:active{ transform: translateY(1px); }
+.day-peek-item:focus-visible{ box-shadow: var(--focus); }
 
-.day-peek-text{
-  min-width: 0;
-  display:flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.day-peek-name{
+.day-peek-empty{
+  padding: 10px 10px;
+  border-radius: 14px;
+  border: 1px dashed rgba(15,23,42,.14);
+  background: rgba(255,255,255,.75);
   font-weight: 900;
-  font-size: 12.5px;
-  line-height: 1.15;
-}
-.day-peek-notes{
-  font-weight: 800;
-  font-size: 12px;
   color: var(--muted);
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
 }
 
-/* Form */
+/* Form layout nuevo */
 #eventForm{
   display:flex;
   flex-direction: column;
   gap: 10px;
+  padding: 0 6px 6px;
 }
 
 #eventForm label{
@@ -924,12 +1090,58 @@ textarea{
   color: var(--muted);
 }
 
+.form-2col{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
 #eventTitle,
 #eventCategory,
 #eventDate,
 #eventStatus,
-#eventNotes{
+#eventNotes,
+#eventAssignee,
+#eventRepeatFreq,
+#eventRepeatInterval,
+#eventRepeatUntil{
   min-width: 100%;
+}
+
+.repeat-box{
+  border: 1px solid rgba(15,23,42,.10);
+  background: rgba(15,23,42,.02);
+  border-radius: 18px;
+  padding: 12px;
+}
+
+.repeat-head{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.repeat-title{
+  font-weight: 900;
+  color: var(--bach);
+}
+.repeat-sub{
+  font-weight: 900;
+  font-size: 12px;
+}
+
+.repeat-grid{
+  display:grid;
+  grid-template-columns: 1.2fr .7fr 1fr;
+  gap: 12px;
+  align-items:end;
+}
+.repeat-help{
+  margin: 10px 0 0;
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* Acciones modal */
@@ -939,15 +1151,47 @@ textarea{
   align-items:center;
   justify-content:space-between;
   gap:10px;
+  padding: 0 6px 6px;
 }
 
 .modal-actions-right{
   display:flex;
   gap:10px;
+  flex-wrap: wrap;
 }
 
 /* =========================
-   Responsive
+   Toast (opcional)
+========================= */
+#toastHost{
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 200;
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+.toast{
+  pointer-events: auto;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(15,23,42,.12);
+  background: rgba(255,255,255,.92);
+  box-shadow: var(--shadow3);
+  font-weight: 900;
+  color: var(--ink);
+  max-width: min(420px, calc(100vw - 28px));
+}
+.toast.hide{
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .2s ease, transform .2s ease;
+}
+
+/* =========================
+   Responsive + calendar horizontal scroll
 ========================= */
 @media (max-width: 980px){
   .overview{ grid-template-columns: 1fr; }
@@ -975,26 +1219,46 @@ textarea{
   .controls-right{
     justify-content: space-between;
   }
+
+  .filter-row{
+    grid-template-columns: 1fr;
+  }
+
+  .form-2col{
+    grid-template-columns: 1fr;
+  }
+  .repeat-grid{
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 740px){
+  /* Calendario: scroll horizontal para ver días sin “aplastarlos” */
+  .calendar{ overflow:auto; }
+  .calendar-grid{
+    width: max(100%, calc(var(--cal-min-col) * 7));
+    grid-template-columns: repeat(7, minmax(var(--cal-min-col), 1fr));
+  }
+  .cal-head{ position: sticky; top: 0; z-index: 2; }
 }
 
 @media (max-width: 620px){
-  .app{ padding: 12px; }
-  .calendar{ border-radius: 16px; }
-  .day{ min-height: 96px; padding: 9px; }
-
-  .chip{ font-size: 11.5px; }
-
-  select, input[type="date"], input[type="text"], textarea{
-    min-width: 100%;
+  .app{
+    width: calc(100vw - 20px);
+    padding: 14px 0 18px;
   }
 
-  .cal-head{ font-size: 11px; }
+  .calendar{ border-radius: 16px; }
+  .day{ min-height: 110px; padding: 9px; }
+
+  .chip{ font-size: 11.5px; }
+  .chip-person{ font-size: 11px; padding: 4px 7px; }
 
   .brand-logo{ height: 40px; }
   .brand-title, .brand-subtitle{ font-size: 12.5px; }
 
   .modal-content{
-    max-height: 82vh;
+    max-height: 90vh;
     border-radius: 18px;
   }
 
