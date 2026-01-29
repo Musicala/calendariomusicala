@@ -92,3 +92,14 @@ export const CALENDAR_CONFIG = {
   weekStartsOn: 1, // 0 = domingo, 1 = lunes
   locale: "es-CO"
 };
+
+export const ASSIGNEES = [
+  "Alek Caballero",
+  "Catalina Medina",
+  "Camila Rodríguez",
+  "Liceth Rincón",
+  "Nancy Caballero",
+  "Emily Bejarano",
+  "Laura Sánchez",
+  "Angie Nitola"
+];
