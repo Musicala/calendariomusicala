@@ -1,23 +1,16 @@
 /* =============================================================================
-  js/ui.js — UI del calendario (render + modal + filtros) — vPRO++++ (ASSIGNEES)
+  js/ui.js — UI del calendario (render + modal + filtros) — vPRO++++++ (CLEAN MODAL)
   -----------------------------------------------------------------------------
   - Render grilla mensual (6x7)
   - Chips de eventos por día (compact + @asignado)
-  - Modal crear/editar (incluye Asignado a + Repetición)
+  - ✅ Quick toggle done/pending sin abrir modal (accesible teclado + UX rápida)
+  - Modal crear/editar (Asignado a + Repetición)
   - Filtros: categoría, estado, persona
-  - Búsqueda: título, notas, persona
+  - Búsqueda: título, notas, persona (con debounce)
   - Vistas: Mes / Lista
-  - Overview: Hoy + Próximos 7 días
-
-  ✅ FIX NUEVO:
-     - Select "Asignado a" (modal) SIEMPRE muestra ASSIGNEES fijo
-     - Filtro "Responsable" SIEMPRE muestra ASSIGNEES fijo
-     - Merge con responsables existentes en eventos (sin perder lógica anterior)
-     - No depende de eventos previos para poblar selects
-
-  Recurrentes (simple):
-  - Se guardan como recurrence: "" | "weekly" | "monthly"
-  - En UI se expanden SOLO en el rango visible (para no duplicar en Firestore)
+  - ✅ Overview: Hoy + Próximos 7 compacto
+  - ✅ Recurrentes: "" | "weekly" | "monthly" | "yearly" (expansión solo rango visible)
+  - ✅ Modal limpio: se quitó “Eventos de este día” (ya existe overview afuera)
 ============================================================================= */
 
 import {
@@ -35,7 +28,8 @@ import {
   isSameDay,
   toISODateLocal,
   qs,
-  escapeHtml
+  escapeHtml,
+  debounce
 } from "./utils.js";
 
 /* =========================
@@ -47,14 +41,14 @@ const $btnNextMonth = qs("#btnNextMonth");
 const $btnToday     = qs("#btnToday");
 const $btnNewEvent  = qs("#btnNewEvent");
 
-const $searchEvents   = qs("#searchEvents");
-const $btnViewMonth   = qs("#btnViewMonth");
-const $btnViewList    = qs("#btnViewList");
-const $monthView      = qs("#monthView");
-const $listView       = qs("#listView");
-const $listBody       = qs("#listBody");
-const $listTitle      = qs("#listTitle");
-const $listMeta       = qs("#listMeta");
+const $searchEvents = qs("#searchEvents");
+const $btnViewMonth = qs("#btnViewMonth");
+const $btnViewList  = qs("#btnViewList");
+const $monthView    = qs("#monthView");
+const $listView     = qs("#listView");
+const $listBody     = qs("#listBody");
+const $listTitle    = qs("#listTitle");
+const $listMeta     = qs("#listMeta");
 
 const $todayList = qs("#todayList");
 const $nextList  = qs("#nextList");
@@ -78,11 +72,23 @@ const $eventDate     = qs("#eventDate");
 const $eventStatus   = qs("#eventStatus");
 const $eventNotes    = qs("#eventNotes");
 
-// NUEVOS: asignado + recurrencia (si no existen, no rompe)
+// Asignado + recurrencia (si no existen, no rompe)
 const $eventAssignedTo = qs("#eventAssignedTo");
 const $eventRecurrence = qs("#eventRecurrence");
 
 const $toastHost = qs("#toastHost");
+
+/* =========================
+   Config UI (tuneable)
+========================= */
+const DAY_MAX_SHOW = Infinity;
+
+const OVERVIEW_TODAY_MAX  = 2;
+const OVERVIEW_NEXT_MAX   = 3;
+const OVERVIEW_DAYS_AHEAD = 7;
+
+// Search debounce (menos re-render histérico)
+const SEARCH_DEBOUNCE_MS = 180;
 
 /* =========================
    Estado UI
@@ -92,7 +98,7 @@ let UI_STATE = {
   monthIndex: new Date().getMonth(),
 
   rawEvents: [],    // tal cual viene de db
-  events: [],       // incluye expansión recurrentes
+  events: [],       // incluye expansión recurrentes (rango visible)
 
   filterCategory: "",
   filterStatus: "",
@@ -127,6 +133,7 @@ function recurrenceLabel(id) {
   const r = String(id || "");
   if (r === "weekly") return "Semanal";
   if (r === "monthly") return "Mensual";
+  if (r === "yearly") return "Anual";
   return "";
 }
 
@@ -141,28 +148,31 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
 
   populateCategorySelects();
   populateStatusSelects();
+  populateRecurrenceSelect();
 
-  // ✅ Inicial: NO depende de eventos. Solo carga el fijo.
-  populateAssignedSelect([]); // ahora mete ASSIGNEES sí o sí
-  populateAssignedToModal([]); // idem para modal
+  // Inicial: no depende de eventos. Mete ASSIGNEES sí o sí.
+  populateAssignedSelect([]);
+  populateAssignedToModal([]);
 
   // Toolbar
   $btnPrevMonth?.addEventListener("click", () => shiftMonth(-1));
   $btnNextMonth?.addEventListener("click", () => shiftMonth(+1));
   $btnToday?.addEventListener("click", () => goToday());
 
-  // ✅ Nuevo evento inteligente
+  // Nuevo evento inteligente
   $btnNewEvent?.addEventListener("click", () => openModalForNew(getSmartDefaultDateISO()));
 
   // Vista Mes/Lista
   $btnViewMonth?.addEventListener("click", () => setView("month"));
   $btnViewList?.addEventListener("click", () => setView("list"));
 
-  // Search
-  $searchEvents?.addEventListener("input", () => {
-    UI_STATE.searchQuery = ($searchEvents.value || "").trim();
+  // Search (debounced)
+  const onSearch = debounce(() => {
+    UI_STATE.searchQuery = ($searchEvents?.value || "").trim();
     rerender();
-  });
+  }, SEARCH_DEBOUNCE_MS);
+
+  $searchEvents?.addEventListener("input", onSearch);
 
   // Filters
   $filterCategory?.addEventListener("change", () => {
@@ -189,21 +199,20 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
     const tag = (e.target?.tagName || "").toLowerCase();
     const typing = ["input","textarea","select"].includes(tag) || e.target?.isContentEditable;
 
-    // ESC cierra modal
     if (e.key === "Escape" && modalOpen) {
       e.preventDefault();
       closeModal();
       return;
     }
 
-    // Ctrl/Cmd + Enter => guardar (submit)
+    // Ctrl/Cmd + Enter => guardar
     if (modalOpen && (e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       $eventForm?.requestSubmit?.();
       return;
     }
 
-    // Ctrl/Cmd + K => enfocar búsqueda (si no estás escribiendo ya)
+    // Ctrl/Cmd + K => enfocar búsqueda
     if (!typing && (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "k")) {
       e.preventDefault();
       ($searchEvents || $filterCategory || $filterStatus)?.focus?.();
@@ -232,8 +241,20 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
     closeModal();
   });
 
-  // Calendar click delegation
+  // =========================
+  // Delegación clicks calendario
+  // =========================
   $calendarGrid?.addEventListener("click", (e) => {
+    // 1) Quick toggle
+    const check = e.target.closest("[data-quick-toggle]");
+    if (check) {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = check.getAttribute("data-quick-toggle");
+      quickToggleDone(id);
+      return;
+    }
+
     // click chip => editar / virtual => nuevo prefill
     const chip = e.target.closest("[data-event-id]");
     if (chip) {
@@ -247,14 +268,6 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
       return;
     }
 
-    // click "+N más" => abrir modal día
-    const moreChip = e.target.closest("[data-more-date]");
-    if (moreChip) {
-      const dateISO = moreChip.getAttribute("data-more-date");
-      openModalForNew(dateISO);
-      return;
-    }
-
     // click celda día => nuevo en ese día
     const dayCell = e.target.closest("[data-date]");
     if (dayCell) {
@@ -263,8 +276,34 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
     }
   });
 
-  // Lista: delegación (más barata que listeners por fila)
+  // =========================
+  // Quick toggle por teclado (Enter/Espacio) en spans
+  // =========================
+  document.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (!t || !(t instanceof HTMLElement)) return;
+    if (!t.matches("[data-quick-toggle]")) return;
+
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      const id = t.getAttribute("data-quick-toggle");
+      quickToggleDone(id);
+    }
+  });
+
+  // =========================
+  // Lista: delegación
+  // =========================
   $listBody?.addEventListener("click", (e) => {
+    const check = e.target.closest("[data-quick-toggle]");
+    if (check) {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = check.getAttribute("data-quick-toggle");
+      quickToggleDone(id);
+      return;
+    }
+
     const row = e.target.closest("[data-event-id]");
     if (!row) return;
     const id = row.getAttribute("data-event-id");
@@ -275,8 +314,19 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
     else openModalForEdit(ev);
   });
 
+  // =========================
   // Overview: delegación
+  // =========================
   const ovClick = (e) => {
+    const check = e.target.closest("[data-quick-toggle]");
+    if (check) {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = check.getAttribute("data-quick-toggle");
+      quickToggleDone(id);
+      return;
+    }
+
     const btn = e.target.closest("[data-event-id]");
     if (!btn) return;
     const id = btn.getAttribute("data-event-id");
@@ -306,19 +356,14 @@ export function setMonth(year, monthIndex) {
 export function setEvents(events = []) {
   UI_STATE.rawEvents = Array.isArray(events) ? events : [];
 
-  // ✅ repoblar responsables con base en raw + ASSIGNEES fijo
+  // repoblar responsables con base en raw + ASSIGNEES fijo
   populateAssignedSelect(UI_STATE.rawEvents);
   populateAssignedToModal(UI_STATE.rawEvents);
+  populateRecurrenceSelect();
 
-  // expand recurrentes SOLO para el rango visible actual
   UI_STATE.events = expandRecurringForVisibleRange(UI_STATE.rawEvents, UI_STATE.year, UI_STATE.monthIndex);
 
   rerender();
-
-  // Si el modal está abierto, refresca “Eventos de este día”
-  if ($eventDate && !$eventModal?.classList.contains("hidden")) {
-    renderDayPeek($eventDate.value);
-  }
 }
 
 export function getCurrentView() {
@@ -338,13 +383,11 @@ export function getFilters() {
    Render orchestrator
 ========================= */
 function rerender() {
-  // expand recurrentes (por si cambió mes)
   UI_STATE.events = expandRecurringForVisibleRange(UI_STATE.rawEvents, UI_STATE.year, UI_STATE.monthIndex);
 
   renderOverview();
   renderCalendar(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
 
-  // Solo lista si estás en vista lista
   if (UI_STATE.view === "list") {
     renderList(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
   }
@@ -361,7 +404,6 @@ export function renderCalendar(year, monthIndex, events = []) {
   if ($currentMonth) $currentMonth.textContent = capitalize(formatMonthTitle(monthDate));
 
   const gridDays = buildMonthGrid(year, monthIndex, CALENDAR_CONFIG.weekStartsOn);
-
   const filteredEvents = applyFilters(events);
 
   // agrupar por dateISO
@@ -378,7 +420,7 @@ export function renderCalendar(year, monthIndex, events = []) {
     arr.sort((a, b) => {
       const aDone = (a.status === "done") ? 1 : 0;
       const bDone = (b.status === "done") ? 1 : 0;
-      if (aDone !== bDone) return aDone - bDone; // pendientes arriba
+      if (aDone !== bDone) return aDone - bDone;
 
       const au = a.updatedAt?.toMillis ? a.updatedAt.toMillis() : 0;
       const bu = b.updatedAt?.toMillis ? b.updatedAt.toMillis() : 0;
@@ -423,21 +465,9 @@ export function renderCalendar(year, monthIndex, events = []) {
     list.className = "event-list";
 
     const dayEvents = byDay.get(dateISO) || [];
-
-    const maxShow = 2;
-    const shown = dayEvents.slice(0, maxShow);
-    const rest = dayEvents.length - shown.length;
+    const shown = dayEvents.slice(0, DAY_MAX_SHOW);
 
     for (const ev of shown) list.appendChild(renderChip(ev));
-
-    if (rest > 0) {
-      const more = document.createElement("button");
-      more.type = "button";
-      more.className = "chip chip-more";
-      more.textContent = `+${rest} más`;
-      more.setAttribute("data-more-date", dateISO);
-      list.appendChild(more);
-    }
 
     cell.appendChild(list);
     $calendarGrid.appendChild(cell);
@@ -472,7 +502,6 @@ function renderList(year, monthIndex, events = []) {
     return;
   }
 
-  // agrupar por dateISO
   let currentDate = "";
   for (const ev of filtered) {
     if ((ev.dateISO || "") !== currentDate) {
@@ -490,7 +519,6 @@ function renderList(year, monthIndex, events = []) {
 
     const st = ev.status || "pending";
     const cat = ev.category || "otro";
-
     const who = (ev.assignedTo || "").trim();
     const rec = (ev.recurrence || "").trim();
 
@@ -514,18 +542,23 @@ function renderList(year, monthIndex, events = []) {
 }
 
 /* =========================
-   Overview: Hoy + Próximos 7
+   Overview: Hoy + Próximos 7 (compacto)
 ========================= */
 function renderOverview() {
   const todayISO = toISODateLocal(new Date());
-  const endISO = toISODateLocal(addDays(new Date(), 7));
+  const endISO = toISODateLocal(addDays(new Date(), OVERVIEW_DAYS_AHEAD));
 
   const filtered = applyFilters(UI_STATE.events);
 
   const todayItems = filtered
     .filter(ev => (ev.dateISO || "") === todayISO)
     .slice()
-    .sort((a,b) => String(a.title||"").localeCompare(String(b.title||""), "es"));
+    .sort((a,b) => {
+      const aDone = (a.status === "done") ? 1 : 0;
+      const bDone = (b.status === "done") ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
+      return String(a.title||"").localeCompare(String(b.title||""), "es");
+    });
 
   const nextItems = filtered
     .filter(ev => {
@@ -535,52 +568,60 @@ function renderOverview() {
     .slice()
     .sort((a,b) => {
       if (a.dateISO !== b.dateISO) return String(a.dateISO||"").localeCompare(String(b.dateISO||""));
+      const aDone = (a.status === "done") ? 1 : 0;
+      const bDone = (b.status === "done") ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
       return String(a.title||"").localeCompare(String(b.title||""), "es");
     });
 
+  // Hoy
   if ($todayList) {
     $todayList.innerHTML = "";
     if (!todayItems.length) {
       $todayList.innerHTML = `<span class="muted">Sin eventos</span>`;
     } else {
-      for (const ev of todayItems.slice(0, 4)) {
-        $todayList.appendChild(renderMiniOverviewItem(ev));
+      for (const ev of todayItems.slice(0, OVERVIEW_TODAY_MAX)) {
+        $todayList.appendChild(renderMiniOverviewItem(ev, { showDate: false, compact: true }));
       }
-      if (todayItems.length > 4) {
+      if (todayItems.length > OVERVIEW_TODAY_MAX) {
         const m = document.createElement("div");
         m.className = "muted";
-        m.textContent = `+${todayItems.length - 4} más…`;
+        m.textContent = `+${todayItems.length - OVERVIEW_TODAY_MAX} más…`;
         $todayList.appendChild(m);
       }
     }
   }
 
+  // Próximos
   if ($nextList) {
     $nextList.innerHTML = "";
     if (!nextItems.length) {
       $nextList.innerHTML = `<span class="muted">Sin eventos</span>`;
     } else {
-      for (const ev of nextItems.slice(0, 6)) {
-        $nextList.appendChild(renderMiniOverviewItem(ev, { showDate: true }));
+      for (const ev of nextItems.slice(0, OVERVIEW_NEXT_MAX)) {
+        $nextList.appendChild(renderMiniOverviewItem(ev, { showDate: true, compact: true }));
       }
-      if (nextItems.length > 6) {
+      if (nextItems.length > OVERVIEW_NEXT_MAX) {
         const m = document.createElement("div");
         m.className = "muted";
-        m.textContent = `+${nextItems.length - 6} más…`;
+        m.textContent = `+${nextItems.length - OVERVIEW_NEXT_MAX} más…`;
         $nextList.appendChild(m);
       }
     }
   }
 }
 
-function renderMiniOverviewItem(ev, { showDate = false } = {}) {
+function renderMiniOverviewItem(ev, { showDate = false, compact = false } = {}) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "ov-item";
+  btn.className = compact ? "ov-item ov-compact" : "ov-item";
   btn.setAttribute("data-event-id", ev.id);
 
   const cat = ev.category || "otro";
   const who = (ev.assignedTo || "").trim();
+  const st  = ev.status || "pending";
+
+  const check = renderQuickToggleHTML(ev, { small: true });
 
   btn.innerHTML = `
     <span class="ov-dot" style="background:${catColor(cat)}"></span>
@@ -589,13 +630,15 @@ function renderMiniOverviewItem(ev, { showDate = false } = {}) {
       <span class="ov-title">${escapeHtml(ev.title || "(Sin título)")}</span>
       ${who ? `<span class="ov-who">@${escapeHtml(who)}</span>` : ""}
     </span>
+    ${check}
+    <span class="ov-st" aria-hidden="true" style="color:${STATUS_COLORS[st] || "#64748B"}">${escapeHtml(st === "done" ? "✓" : (st === "cancelled" ? "×" : "•"))}</span>
   `;
 
   return btn;
 }
 
 /* =========================
-   Chips
+   Chips (mes)
 ========================= */
 function renderChip(ev) {
   const chip = document.createElement("button");
@@ -604,11 +647,13 @@ function renderChip(ev) {
   chip.setAttribute("data-event-id", ev.id);
 
   const cat = ev.category || "otro";
-  const st = ev.status || "pending";
+  const st  = ev.status || "pending";
   const who = (ev.assignedTo || "").trim();
   const rec = (ev.recurrence || "").trim();
 
   chip.style.borderLeftColor = catColor(cat);
+  if (st === "done") chip.classList.add("is-done");
+  if (st === "cancelled") chip.classList.add("is-cancelled");
 
   const titleBits = [
     `${catLabel(cat)} · ${statusLabel(st)}${rec ? ` · ${recurrenceLabel(rec)}` : ""}`,
@@ -619,13 +664,61 @@ function renderChip(ev) {
 
   chip.title = titleBits;
 
+  const check = renderQuickToggleHTML(ev, { small: false });
+
   chip.innerHTML = `
     <span class="chip-dot" style="color:${STATUS_COLORS[st] || "#64748B"}">${escapeHtml(st === "done" ? "✓" : (st === "cancelled" ? "×" : "•"))}</span>
     <span class="chip-text">${escapeHtml(ev.title || "(Sin título)")}</span>
     ${who ? `<span class="chip-person">@${escapeHtml(who)}</span>` : ""}
+    ${check}
   `;
 
   return chip;
+}
+
+function renderQuickToggleHTML(ev, { small = false } = {}) {
+  // No permitir “toggle” en ocurrencias virtuales (no guardadas)
+  if (ev?._virtualFromId) return "";
+
+  const st = ev.status || "pending";
+  const isDone = st === "done";
+  const label = isDone ? "Marcar pendiente" : "Marcar hecho";
+  const cls = small ? "chip-check chip-check-sm" : "chip-check";
+
+  return `
+    <span class="${cls}"
+          role="button"
+          tabindex="0"
+          aria-label="${escapeHtml(label)}"
+          title="${escapeHtml(label)}"
+          data-quick-toggle="${escapeHtml(ev.id)}">${isDone ? "✓" : ""}</span>
+  `;
+}
+
+function quickToggleDone(eventId) {
+  const id = String(eventId || "").trim();
+  if (!id) return;
+
+  // Buscar en rawEvents por ID real
+  const raw = UI_STATE.rawEvents.find(e => String(e.id) === id);
+  if (!raw) return;
+
+  const st = raw.status || "pending";
+  if (st === "cancelled") {
+    notify("Este evento está cancelado. No lo marco como hecho.", { mode: "toast" });
+    return;
+  }
+
+  const next = (st === "done") ? "pending" : "done";
+
+  // Optimistic UI: cambia local ya, para que se sienta instantáneo
+  raw.status = next;
+  rerender();
+
+  // Persistencia real
+  UI_STATE.onUpdate?.(id, { status: next });
+
+  notify(next === "done" ? "Hecho ✅" : "Marcado como pendiente ◻️", { mode: "toast", ms: 1400 });
 }
 
 /* =========================
@@ -639,8 +732,8 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
 
   const baseCat = CATEGORIES[0]?.id || "otro";
 
-  // ✅ Asegurar selects del modal (por si abres modal antes de cargar eventos)
   populateAssignedToModal(UI_STATE.rawEvents);
+  populateRecurrenceSelect();
 
   if ($eventTitle) $eventTitle.value = prefillFromEvent?.title ? String(prefillFromEvent.title) : "";
   if ($eventCategory) $eventCategory.value = prefillFromEvent?.category ? String(prefillFromEvent.category) : baseCat;
@@ -655,7 +748,6 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
 
   openModal();
   ensureModalEnhancements();
-  renderDayPeek(iso);
 
   setTimeout(() => $eventTitle?.focus(), 0);
 }
@@ -664,8 +756,8 @@ function openModalForEdit(ev) {
   UI_STATE.editingId = ev.id;
   if ($modalTitle) $modalTitle.textContent = "Editar evento";
 
-  // ✅ Asegurar selects del modal (incluye el valor actual aunque no esté en ASSIGNEES)
   populateAssignedToModal(UI_STATE.rawEvents, ev.assignedTo || "");
+  populateRecurrenceSelect();
 
   if ($eventTitle) $eventTitle.value = ev.title || "";
   if ($eventCategory) $eventCategory.value = ev.category || (CATEGORIES[0]?.id || "otro");
@@ -680,7 +772,6 @@ function openModalForEdit(ev) {
 
   openModal();
   ensureModalEnhancements();
-  renderDayPeek($eventDate?.value || ev.dateISO || "");
 
   setTimeout(() => $eventTitle?.focus(), 0);
 }
@@ -704,8 +795,8 @@ function readModalPayload() {
     problems.push("La fecha debe estar en formato yyyy-mm-dd.");
   }
 
-  if (recurrence && !["weekly","monthly"].includes(recurrence)) {
-    problems.push("Repetición inválida (semanal/mensual).");
+  if (recurrence && !["weekly","monthly","yearly"].includes(recurrence)) {
+    problems.push("Repetición inválida (semanal/mensual/anual).");
   }
 
   if (problems.length) {
@@ -733,35 +824,15 @@ function closeModal() {
 }
 
 /* =========================
-   Modal Enhancements
-   - Bloque "Eventos del día"
-   - Botón "Duplicar"
+   Modal Enhancements (LIMPIO)
+   - Quitamos “Eventos de este día”
+   - Duplicar: ahora duplica campos en el modal (no crea sin preguntar)
 ========================= */
 function ensureModalEnhancements() {
   const modalContent = $eventModal?.querySelector(".modal-content");
   if (!modalContent) return;
 
-  // Bloque "Eventos del día"
-  let peek = modalContent.querySelector("#dayPeek");
-  if (!peek) {
-    peek = document.createElement("div");
-    peek.id = "dayPeek";
-    peek.className = "day-peek";
-
-    peek.innerHTML = `
-      <div class="day-peek-head">
-        <span class="day-peek-title">Eventos de este día</span>
-        <span class="day-peek-sub" id="dayPeekCount">—</span>
-      </div>
-      <div class="day-peek-list" id="dayPeekList"></div>
-    `;
-
-    const head = modalContent.querySelector(".modal-head") || modalContent.querySelector("h3");
-    if (head?.nextSibling) head.parentNode.insertBefore(peek, head.nextSibling);
-    else modalContent.appendChild(peek);
-  }
-
-  // Botón duplicar
+  // Botón duplicar (solo una vez)
   const actionsRight = modalContent.querySelector(".modal-actions-right");
   if (actionsRight && !modalContent.querySelector("#btnDuplicateEvent")) {
     const dup = document.createElement("button");
@@ -774,78 +845,20 @@ function ensureModalEnhancements() {
       const payload = readModalPayload();
       if (!payload) return;
 
+      // En vez de crear y cerrar (sorpresa), abrimos "nuevo duplicado" editable
       UI_STATE.editingId = null;
       if ($modalTitle) $modalTitle.textContent = "Nuevo evento (duplicado)";
       hide($btnDeleteEvent);
 
-      payload.title = payload.title ? `${payload.title} (copia)` : "Evento (copia)";
-      UI_STATE.onCreate?.(payload);
-      closeModal();
+      if ($eventTitle) $eventTitle.value = payload.title ? `${payload.title} (copia)` : "Evento (copia)";
+      // Mantener categoría/fecha/estado/nota/responsable/recurrencia tal cual
+      // (si quieren, se puede limpiar recurrencia aquí)
+      notify("Duplicado listo ✨ Ajusta lo que quieras y guarda.", { mode: "toast", ms: 1600 });
+      setTimeout(() => $eventTitle?.focus(), 0);
     });
 
     const submitBtn = actionsRight.querySelector("button[type='submit']");
     actionsRight.insertBefore(dup, submitBtn || null);
-  }
-
-  // refrescar day peek al cambiar fecha
-  if ($eventDate && !$eventDate.dataset.peekBound) {
-    $eventDate.dataset.peekBound = "1";
-    $eventDate.addEventListener("change", () => renderDayPeek($eventDate.value));
-  }
-}
-
-function renderDayPeek(dateISO) {
-  const $count = qs("#dayPeekCount");
-  const $list  = qs("#dayPeekList");
-  if (!$count || !$list) return;
-
-  const iso = (dateISO || "").trim();
-  if (!iso) {
-    $count.textContent = "";
-    $list.innerHTML = `<div class="day-peek-empty">Sin fecha.</div>`;
-    return;
-  }
-
-  const items = applyFilters(UI_STATE.events || [])
-    .filter(ev => (ev.dateISO || "") === iso)
-    .sort((a, b) => String(a.title||"").localeCompare(String(b.title||""), "es"));
-
-  $count.textContent = `${items.length} ${items.length === 1 ? "evento" : "eventos"}`;
-
-  if (!items.length) {
-    $list.innerHTML = `<div class="day-peek-empty">No hay eventos ese día.</div>`;
-    return;
-  }
-
-  $list.innerHTML = "";
-  for (const ev of items.slice(0, 6)) {
-    const who = (ev.assignedTo || "").trim();
-    const rec = (ev.recurrence || "").trim();
-
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "day-peek-item";
-    row.setAttribute("data-event-id", ev.id);
-
-    row.innerHTML = `
-      <span class="day-peek-dot" style="background:${catColor(ev.category || "otro")}"></span>
-      <span class="day-peek-text">
-        ${escapeHtml(ev.title || "(Sin título)")}
-        ${who ? `<span class="day-peek-who"> @${escapeHtml(who)}</span>` : ""}
-        ${rec ? `<span class="day-peek-rec"> · ${escapeHtml(recurrenceLabel(rec))}</span>` : ""}
-        ${ev._virtualFromId ? `<span class="day-peek-ghost"> · ocurrencia</span>` : ""}
-      </span>
-      <span class="day-peek-st">${escapeHtml(statusLabel(ev.status || "pending"))}</span>
-    `;
-
-    $list.appendChild(row);
-  }
-
-  if (items.length > 6) {
-    const more = document.createElement("div");
-    more.className = "day-peek-more";
-    more.textContent = `+${items.length - 6} más…`;
-    $list.appendChild(more);
   }
 }
 
@@ -959,21 +972,35 @@ function populateStatusSelects() {
   }
 }
 
-/**
- * ✅ Lista final de responsables:
- * - ASSIGNEES fijo (si existe)
- * - + responsables encontrados en eventos
- * - sin duplicados (normalizado)
- * - orden alfabético (es)
- */
+function populateRecurrenceSelect() {
+  if (!$eventRecurrence) return;
+
+  const prev = ($eventRecurrence.value || "").trim();
+
+  const opts = [
+    { value: "", label: "—" },
+    { value: "weekly", label: "Semanal" },
+    { value: "monthly", label: "Mensual" },
+    { value: "yearly", label: "Anual" }
+  ];
+
+  $eventRecurrence.innerHTML = "";
+  for (const o of opts) {
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = o.label;
+    $eventRecurrence.appendChild(opt);
+  }
+
+  if (opts.some(o => o.value === prev)) $eventRecurrence.value = prev;
+}
+
 function getMergedAssigneesFrom(events = []) {
   const fixed = Array.isArray(ASSIGNEES) ? ASSIGNEES : [];
-
   const dynamic = (events || [])
     .map(e => String(e.assignedTo || "").trim())
     .filter(Boolean);
 
-  // dedup robusto (case-insensitive + trim)
   const map = new Map();
   for (const name of [...fixed, ...dynamic]) {
     const clean = String(name || "").trim();
@@ -985,12 +1012,6 @@ function getMergedAssigneesFrom(events = []) {
   return Array.from(map.values()).sort((a,b) => a.localeCompare(b, "es"));
 }
 
-/**
- * ✅ Filtro por responsable (#filterAssignedTo)
- * - siempre incluye ASSIGNEES fijo
- * - + merge con responsables existentes en eventos
- * - preserva selección si aún existe
- */
 function populateAssignedSelect(events) {
   if (!$filterAssignedTo) return;
 
@@ -1009,17 +1030,10 @@ function populateAssignedSelect(events) {
     $filterAssignedTo.appendChild(opt);
   }
 
-  // mantener selección si sigue existiendo
   if (prev && list.includes(prev)) $filterAssignedTo.value = prev;
   else if (prev && prev !== "") $filterAssignedTo.value = "";
 }
 
-/**
- * ✅ Modal Asignado a (#eventAssignedTo)
- * - siempre incluye ASSIGNEES fijo
- * - + merge con responsables existentes en eventos
- * - asegura que el valor actual exista como option aunque no esté en lista
- */
 function populateAssignedToModal(events, ensureValue = "") {
   if (!$eventAssignedTo) return;
 
@@ -1037,10 +1051,7 @@ function populateAssignedToModal(events, ensureValue = "") {
 
   const list = getMergedAssigneesFrom(events);
 
-  // si el evento trae un responsable que no está en fijo ni dinámico (raro pero posible),
-  // lo garantizamos para no “borrar” visualmente el valor.
   if (desired && !list.includes(desired)) list.push(desired);
-
   list.sort((a,b) => a.localeCompare(b, "es"));
 
   $eventAssignedTo.innerHTML = "";
@@ -1054,7 +1065,6 @@ function populateAssignedToModal(events, ensureValue = "") {
     $eventAssignedTo.appendChild(opt);
   }
 
-  // restaurar selección
   $eventAssignedTo.value = desired || "";
 }
 
@@ -1091,6 +1101,8 @@ function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
       out.push(...expandWeekly(ev, startISO, fromISO, toISO));
     } else if (rec === "monthly") {
       out.push(...expandMonthly(ev, startISO, fromISO, toISO));
+    } else if (rec === "yearly") {
+      out.push(...expandYearly(ev, startISO, fromISO, toISO));
     }
   }
 
@@ -1131,19 +1143,40 @@ function expandMonthly(ev, startISO, fromISO, toISO) {
   const fromD = isoToDate(fromISO);
   const toD   = isoToDate(toISO);
 
-  // arrancar desde el mes del rango, con el mismo día del start
   let cur = new Date(fromD.getFullYear(), fromD.getMonth(), start.getDate(), 0,0,0,0);
 
-  // No crear ocurrencias antes de la fecha de inicio real del evento
   while (cur < start) cur = addMonthsSafe(cur, 1);
-
-  // entrar al rango visible
   while (cur < fromD) cur = addMonthsSafe(cur, 1);
 
   while (cur <= toD) {
     const iso = toISODateLocal(cur);
     if (iso !== startISO) res.push(makeVirtualOccurrence(ev, iso));
     cur = addMonthsSafe(cur, 1);
+  }
+
+  return res;
+}
+
+function expandYearly(ev, startISO, fromISO, toISO) {
+  const res = [];
+  const start = isoToDate(startISO);
+  const fromD = isoToDate(fromISO);
+  const toD   = isoToDate(toISO);
+
+  const targetMonth = start.getMonth();
+  const targetDay   = start.getDate();
+
+  let year = fromD.getFullYear() - 1;
+  while (year <= toD.getFullYear() + 1) {
+    const dt = new Date(year, targetMonth, 1, 0,0,0,0);
+    const last = new Date(year, targetMonth + 1, 0).getDate();
+    dt.setDate(Math.min(targetDay, last));
+
+    if (dt >= fromD && dt <= toD) {
+      const iso = toISODateLocal(dt);
+      if (iso !== startISO) res.push(makeVirtualOccurrence(ev, iso));
+    }
+    year++;
   }
 
   return res;
@@ -1170,9 +1203,6 @@ function capitalize(s = "") {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-/**
- * ✅ Fecha default inteligente para "Nuevo evento"
- */
 function getSmartDefaultDateISO() {
   const now = new Date();
   const viewingThisMonth = (UI_STATE.year === now.getFullYear() && UI_STATE.monthIndex === now.getMonth());
@@ -1208,7 +1238,7 @@ function addMonthsSafe(date, months) {
 /* =========================
    Notificaciones
 ========================= */
-function notify(msg, { mode = "toast", ms = 2600 } = {}) {
+function notify(msg, { mode = "toast", ms = 2200 } = {}) {
   const text = String(msg || "").trim();
   if (!text) return;
 
