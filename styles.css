@@ -1,15 +1,17 @@
 /* =============================================================================
-  styles.css — Calendario · Musicala (vPRO LIGHT) — Brand Edition PRO+++ (Ultra)
+  styles.css — Calendario · Musicala (vPRO LIGHT) — Brand Edition PRO++++ (Ultra++)
   -----------------------------------------------------------------------------
   ✅ 100% light (regla Musicala)
   ✅ Header premium + logo + acciones
   ✅ Overview (Hoy / Próximos 7) con items clicables
   ✅ Controles: buscador PRO + segmented + filtros (incluye Asignado)
   ✅ Calendar grid estable + chips compactos + "@persona"
-  ✅ SIN "+N más": se ven TODOS los eventos (scroll interno si se desborda)
-  ✅ Full width: calendario a lo ancho de pantalla
-  ✅ Modal limpio + “Eventos del día” + scroll seguro
-  ✅ Toast (si existe #toastHost en HTML)
+  ✅ Se ven TODOS los eventos (scroll interno si se desborda)
+  ✅ Full width real (sin “caja angosta”)
+  ✅ Modal limpio (SIN “Eventos del día” para no duplicar overview)
+  ✅ Quick toggle en chips + overview (si ui.js lo pinta)
+  ✅ Toast (si existe #toastHost)
+  ✅ Retro-compat IDs antiguos (eventAssignee/eventRepeat*) + IDs nuevos (eventAssignedTo/eventRecurrence)
 ============================================================================= */
 
 /* =========================
@@ -67,13 +69,19 @@
   --chip-pad: 7px 10px;
 
   /* calendar sizing */
-  --cal-min-col: 150px;     /* ancho mínimo por día en pantallas pequeñas (para scroll horizontal) */
-  --day-min-h: 128px;       /* alto mínimo de cada día */
-  --day-max-h: 220px;       /* alto máximo visible antes de scroll interno (para ver "todo" sin truncar) */
+  --cal-min-col: 150px;
+  --day-min-h: 128px;
+  --day-max-h: 240px; /* un poquito más para que “se vea todo” de verdad */
 
   /* gradient helpers */
   --g1: radial-gradient(1100px 600px at 10% -10%, rgba(12,65,196,.10), transparent 55%);
   --g2: radial-gradient(900px 520px at 100% 0%, rgba(206,0,113,.10), transparent 55%);
+
+  /* safe-area (iOS) */
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
 }
 
 /* =========================
@@ -84,11 +92,12 @@ html,body{ height:100%; }
 
 body{
   margin:0;
-  font-family: Roboto, Inter, system-ui, -apple-system, Segoe UI, Ubuntu, Arial, sans-serif;
+  font-family: Inter, Roboto, system-ui, -apple-system, Segoe UI, Ubuntu, Arial, sans-serif;
   color:var(--ink);
   background: var(--g1), var(--g2), var(--bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  padding-bottom: var(--safe-b);
 }
 
 a{ color:inherit; }
@@ -133,7 +142,6 @@ a{ color:inherit; }
   border:0 !important;
 }
 
-/* Skip link: NO se muestra a menos que uses teclado */
 .skip-link{
   position: absolute;
   left: 12px;
@@ -175,7 +183,7 @@ a{ color:inherit; }
   justify-content:space-between;
   gap:12px;
 
-  padding:14px 18px;
+  padding: calc(14px + var(--safe-t)) calc(18px + var(--safe-r)) 14px calc(18px + var(--safe-l));
   background: var(--header-bg);
   backdrop-filter: blur(var(--header-blur));
   border-bottom:1px solid var(--line);
@@ -209,12 +217,8 @@ a{ color:inherit; }
   filter: drop-shadow(0 2px 8px rgba(15,23,42,.10));
 }
 
-@media (min-width: 640px){
-  .brand-logo{ height: 52px; }
-}
-@media (min-width: 1024px){
-  .brand-logo{ height: 64px; }
-}
+@media (min-width: 640px){ .brand-logo{ height: 52px; } }
+@media (min-width: 1024px){ .brand-logo{ height: 64px; } }
 
 .brand-text{
   display:flex;
@@ -271,7 +275,7 @@ a{ color:inherit; }
   box-shadow: var(--shadow2);
 }
 .btn:active{ transform: translateY(1px); }
-.btn:focus-visible{ box-shadow: var(--focus); }
+.btn:focus-visible{ box-shadow: var(--focus-strong); }
 
 .btn.primary{
   background: linear-gradient(135deg, var(--mozart), var(--bach));
@@ -296,18 +300,17 @@ a{ color:inherit; }
 }
 
 /* =========================
-   Layout main
-   - Full width: no más "caja angosta".
+   Layout main (Full width real)
 ========================= */
 .app{
-  width: min(1400px, calc(100vw - 32px));
+  width: min(1600px, calc(100vw - 32px));
   max-width: none;
   margin: 0 auto;
   padding: 18px 0 22px;
 }
 
 @media (min-width: 1440px){
-  .app{ width: min(1600px, calc(100vw - 48px)); }
+  .app{ width: min(1800px, calc(100vw - 48px)); }
 }
 
 .unauthorized{
@@ -430,7 +433,10 @@ a{ color:inherit; }
   box-shadow: var(--shadow3);
 }
 .ov-item:active{ transform: translateY(1px); }
-.ov-item:focus-visible{ box-shadow: var(--focus); }
+.ov-item:focus-visible{ box-shadow: var(--focus-strong); }
+
+/* Variante compacta si ui.js la usa */
+.ov-item.ov-compact{ padding: 9px 10px; }
 
 .ov-dot{
   width:10px; height:10px;
@@ -456,6 +462,14 @@ a{ color:inherit; }
   font-weight: 900;
   font-size: 12px;
   color: var(--mozart);
+}
+
+/* Estado a la derecha en overview (ui.js) */
+.ov-st{
+  margin-left: 4px;
+  font-weight: 900;
+  opacity: .9;
+  flex: 0 0 auto;
 }
 
 /* =========================
@@ -567,7 +581,7 @@ a{ color:inherit; }
 }
 
 /* =========================
-   Filters (versión nueva con labels visibles)
+   Filters (con labels visibles)
 ========================= */
 .filters{
   margin-top: var(--gap);
@@ -614,7 +628,7 @@ select, input[type="date"], input[type="text"], textarea, input[type="number"]{
 }
 
 select:focus, input[type="date"]:focus, input[type="text"]:focus, textarea:focus, input[type="number"]:focus{
-  box-shadow: var(--focus);
+  box-shadow: var(--focus-strong);
   border-color: rgba(12,65,196,.35);
   background:#fff;
 }
@@ -622,10 +636,7 @@ select:active, input[type="date"]:active, input[type="text"]:active, textarea:ac
   transform: translateY(1px);
 }
 
-textarea{
-  min-width: 100%;
-  resize: vertical;
-}
+textarea{ resize: vertical; min-height: 96px; }
 
 /* caret decente */
 select{
@@ -640,8 +651,6 @@ select{
 
 /* =========================
    Calendar
-   - Desktop: 7 cols
-   - Mobile: scroll horizontal para ver días (sin reventar)
 ========================= */
 .calendar{
   margin-top: var(--gap);
@@ -652,7 +661,7 @@ select{
   overflow: hidden;
 }
 
-/* Wrapper: permite scroll horizontal solo cuando haga falta */
+/* Grid */
 .calendar-grid{
   display:grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -684,9 +693,7 @@ select{
   transition: background .15s ease, box-shadow .15s ease, transform .08s ease;
 }
 
-.day:nth-child(7n){
-  border-right: none;
-}
+.day:nth-child(7n){ border-right: none; }
 
 .day.muted{
   background: rgba(15,23,42,.02);
@@ -697,7 +704,6 @@ select{
   background: rgba(12,65,196,.035);
   box-shadow: inset 0 0 0 1px rgba(12,65,196,.08);
 }
-
 .day:active{ transform: translateY(1px); }
 
 .day.today{
@@ -738,9 +744,10 @@ select{
   flex-direction: column;
   gap:6px;
 
-  max-height: calc(var(--day-max-h) - 44px); /* 44px aprox header del día */
+  max-height: calc(var(--day-max-h) - 44px);
   overflow:auto;
-  padding-right: 4px;
+  padding-right: 6px;
+  overscroll-behavior: contain;
 }
 
 /* =========================
@@ -770,14 +777,13 @@ select{
   line-height: 1.15;
   transition: transform .08s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
-
 .chip:hover{
   background: rgba(12,65,196,.06);
   border-color: rgba(12,65,196,.22);
   box-shadow: 0 6px 16px rgba(12,65,196,.10);
 }
 .chip:active{ transform: translateY(1px); }
-.chip:focus-visible{ box-shadow: var(--focus); }
+.chip:focus-visible{ box-shadow: var(--focus-strong); }
 
 .chip-dot{
   width: 14px;
@@ -794,6 +800,17 @@ select{
   white-space:nowrap;
 }
 
+/* Estados por clase (ui.js) */
+.chip.is-done{
+  background: rgba(22,163,74,.06);
+  border-color: rgba(22,163,74,.20);
+}
+.chip.is-cancelled{
+  background: rgba(239,68,68,.06);
+  border-color: rgba(239,68,68,.20);
+  opacity: .92;
+}
+
 /* @persona */
 .chip-person{
   flex: 0 0 auto;
@@ -808,12 +825,42 @@ select{
   white-space:nowrap;
 }
 
-/* Si el JS viejo todavía pinta chip-more, lo ocultamos.
-   (mejor que no aparezca “+1 más” nunca) */
+/* Quick toggle (ui.js: .chip-check / .chip-check-sm) */
+.chip-check{
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 9px;
+  border: 1px solid rgba(15,23,42,.16);
+  background: rgba(255,255,255,.88);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-weight: 900;
+  color: var(--ok);
+  margin-left: 6px;
+  box-shadow: 0 1px 0 rgba(15,23,42,.04);
+  transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
+}
+
+.chip-check:hover{
+  border-color: rgba(12,65,196,.24);
+  background: #fff;
+  box-shadow: var(--shadow3);
+}
+.chip-check:active{ transform: translateY(1px); }
+
+.chip-check-sm{
+  width: 20px;
+  height: 20px;
+  border-radius: 8px;
+}
+
+/* Si el JS viejo todavía pinta chip-more, lo ocultamos */
 .chip-more{ display:none !important; }
 
 /* =========================
-   List view (vPRO)
+   List view
 ========================= */
 .list-view{
   margin-top: var(--gap);
@@ -889,14 +936,13 @@ select{
 
   transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
 }
-
 .list-item:hover{
   border-color: rgba(15,23,42,.18);
   background: #fff;
   box-shadow: var(--shadow3);
 }
 .list-item:active{ transform: translateY(1px); }
-.list-item:focus-visible{ box-shadow: var(--focus); }
+.list-item:focus-visible{ box-shadow: var(--focus-strong); }
 
 .list-dot{
   width: 10px;
@@ -944,6 +990,11 @@ select{
   border-color: rgba(206,0,113,.18);
   color: var(--wagner);
 }
+.list-pill.ghost{
+  background: rgba(15,23,42,.05);
+  border-color: rgba(15,23,42,.10);
+  color: var(--muted);
+}
 
 .list-st{
   flex: 0 0 auto;
@@ -974,8 +1025,8 @@ select{
 }
 
 .modal-content{
-  width: min(640px, 100%);
-  max-height: min(86vh, 820px);
+  width: min(680px, 100%);
+  max-height: min(86vh, 880px);
   overflow: auto;
 
   background: var(--panel);
@@ -984,6 +1035,7 @@ select{
   box-shadow: var(--shadow);
 
   padding: 16px;
+  overscroll-behavior: contain;
 }
 
 .modal-head{
@@ -1000,80 +1052,10 @@ select{
   font-weight: 800;
 }
 
-/* Bloque “Eventos del día” (ui.js) */
-.day-peek{
-  margin: 0 6px 12px;
-  padding: 12px 12px;
-  border-radius: 18px;
-  border: 1px solid rgba(15,23,42,.10);
-  background:
-    radial-gradient(420px 200px at 10% 0%, rgba(12,65,196,.08), transparent 62%),
-    rgba(15,23,42,.02);
-}
+/* ✅ Si algún ui.js viejo inyecta day-peek, lo ocultamos para no duplicar */
+.day-peek{ display:none !important; }
 
-.day-peek-head{
-  display:flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.day-peek-title{
-  font-weight: 900;
-  color: var(--bach);
-  font-size: 12.5px;
-  letter-spacing:.2px;
-}
-
-.day-peek-sub{
-  font-weight: 900;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.day-peek-list{
-  display:flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.day-peek-item{
-  width:100%;
-  text-align:left;
-  appearance:none;
-  cursor:pointer;
-
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-between;
-  gap: 10px;
-
-  padding: 10px 10px;
-  border-radius: 14px;
-  border: 1px solid rgba(15,23,42,.10);
-  background: rgba(255,255,255,.90);
-
-  transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
-}
-.day-peek-item:hover{
-  border-color: rgba(15,23,42,.18);
-  background: #fff;
-  box-shadow: var(--shadow3);
-}
-.day-peek-item:active{ transform: translateY(1px); }
-.day-peek-item:focus-visible{ box-shadow: var(--focus); }
-
-.day-peek-empty{
-  padding: 10px 10px;
-  border-radius: 14px;
-  border: 1px dashed rgba(15,23,42,.14);
-  background: rgba(255,255,255,.75);
-  font-weight: 900;
-  color: var(--muted);
-}
-
-/* Form layout nuevo */
+/* Form layout */
 #eventForm{
   display:flex;
   flex-direction: column;
@@ -1096,52 +1078,19 @@ select{
   gap: 12px;
 }
 
+/* Inputs del modal (IDs nuevos + compat con viejos) */
 #eventTitle,
 #eventCategory,
 #eventDate,
 #eventStatus,
 #eventNotes,
-#eventAssignee,
-#eventRepeatFreq,
-#eventRepeatInterval,
-#eventRepeatUntil{
+#eventAssignedTo,     /* nuevo */
+#eventRecurrence,     /* nuevo */
+#eventAssignee,       /* viejo */
+#eventRepeatFreq,     /* viejo */
+#eventRepeatInterval, /* viejo */
+#eventRepeatUntil{    /* viejo */
   min-width: 100%;
-}
-
-.repeat-box{
-  border: 1px solid rgba(15,23,42,.10);
-  background: rgba(15,23,42,.02);
-  border-radius: 18px;
-  padding: 12px;
-}
-
-.repeat-head{
-  display:flex;
-  align-items:baseline;
-  justify-content:space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.repeat-title{
-  font-weight: 900;
-  color: var(--bach);
-}
-.repeat-sub{
-  font-weight: 900;
-  font-size: 12px;
-}
-
-.repeat-grid{
-  display:grid;
-  grid-template-columns: 1.2fr .7fr 1fr;
-  gap: 12px;
-  align-items:end;
-}
-.repeat-help{
-  margin: 10px 0 0;
-  font-weight: 800;
-  font-size: 12px;
-  color: var(--muted);
 }
 
 /* Acciones modal */
@@ -1165,8 +1114,8 @@ select{
 ========================= */
 #toastHost{
   position: fixed;
-  right: 14px;
-  bottom: 14px;
+  right: calc(14px + var(--safe-r));
+  bottom: calc(14px + var(--safe-b));
   z-index: 200;
   display:flex;
   flex-direction: column;
@@ -1208,32 +1157,21 @@ select{
   }
   .user-email{ max-width: 70vw; }
 
-  .brand-title, .brand-subtitle{
-    font-size: 13px;
-  }
+  .brand-title, .brand-subtitle{ font-size: 13px; }
 
   .controls{
     flex-direction: column;
     align-items: stretch;
   }
-  .controls-right{
-    justify-content: space-between;
-  }
+  .controls-right{ justify-content: space-between; }
 
-  .filter-row{
-    grid-template-columns: 1fr;
-  }
+  .filter-row{ grid-template-columns: 1fr; }
 
-  .form-2col{
-    grid-template-columns: 1fr;
-  }
-  .repeat-grid{
-    grid-template-columns: 1fr;
-  }
+  .form-2col{ grid-template-columns: 1fr; }
 }
 
 @media (max-width: 740px){
-  /* Calendario: scroll horizontal para ver días sin “aplastarlos” */
+  /* Calendario: scroll horizontal para ver días sin aplastarlos */
   .calendar{ overflow:auto; }
   .calendar-grid{
     width: max(100%, calc(var(--cal-min-col) * 7));
@@ -1250,6 +1188,7 @@ select{
 
   .calendar{ border-radius: 16px; }
   .day{ min-height: 110px; padding: 9px; }
+  .event-list{ max-height: calc(var(--day-max-h) - 40px); }
 
   .chip{ font-size: 11.5px; }
   .chip-person{ font-size: 11px; padding: 4px 7px; }

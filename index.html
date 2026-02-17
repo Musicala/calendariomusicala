@@ -2,26 +2,32 @@
 <html lang="es-CO">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 
   <title>Calendario · Musicala</title>
   <meta name="description" content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios." />
   <meta name="color-scheme" content="light" />
   <meta name="theme-color" content="#ffffff" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
 
-  <!-- Estilos -->
-  <link rel="stylesheet" href="styles.css" />
+  <!-- (Opcional) PWA: si ya tienes manifest y icons, queda listo -->
+  <!-- <link rel="manifest" href="manifest.webmanifest" /> -->
+  <!-- <link rel="icon" href="icons/icon-192.png" sizes="192x192" /> -->
+  <!-- <link rel="apple-touch-icon" href="icons/icon-192.png" /> -->
 
-  <!-- Fuente -->
+  <!-- Fuente (preconnect + preload para menos FOUT) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preload"
+        as="style"
+        href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;600;800;900&display=swap" />
   <link
     href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;600;800;900&display=swap"
     rel="stylesheet"
   />
 
-  <!-- Pequeñas ayudas -->
-  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <!-- Estilos -->
+  <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
@@ -43,26 +49,37 @@
   <header class="header" role="banner">
     <div class="header-left">
       <div class="brand" aria-label="Musicala">
-        <img src="./logo.png" alt="Musicala" class="brand-logo" />
+        <img
+          src="./logo.png"
+          alt="Musicala"
+          class="brand-logo"
+          loading="eager"
+          decoding="async"
+        />
         <div class="brand-text">
           <span class="brand-title">Calendario</span>
           <span class="brand-subtitle">Musicala</span>
         </div>
       </div>
 
-      <span id="userEmail" class="user-email hidden" aria-live="polite"></span>
+      <span id="userEmail" class="user-email hidden" aria-live="polite" aria-atomic="true"></span>
     </div>
 
     <div class="header-right" aria-label="Sesión">
-      <button id="btnLogin" class="btn primary" type="button">Iniciar sesión</button>
-      <button id="btnLogout" class="btn ghost hidden" type="button">Salir</button>
+      <button id="btnLogin" class="btn primary" type="button" aria-label="Iniciar sesión">
+        Iniciar sesión
+      </button>
+
+      <button id="btnLogout" class="btn ghost hidden" type="button" aria-label="Cerrar sesión">
+        Salir
+      </button>
     </div>
   </header>
 
   <!-- ======================
        BLOQUE NO AUTORIZADO
   ======================= -->
-  <section id="unauthorized" class="unauthorized hidden" role="status" aria-live="polite">
+  <section id="unauthorized" class="unauthorized hidden" role="status" aria-live="polite" aria-atomic="true">
     <p>
       Este calendario es de uso interno.<br />
       Si crees que deberías tener acceso, revisa el correo con el que iniciaste sesión.
@@ -72,19 +89,29 @@
   <!-- ======================
        APP PRINCIPAL
   ======================= -->
-  <main id="app" class="app hidden" role="main">
+  <main id="app" class="app hidden" role="main" tabindex="-1">
 
     <!-- Toolbar -->
     <section class="toolbar" aria-label="Navegación de mes">
-      <div class="toolbar-left">
-        <button id="btnPrevMonth" class="btn ghost" type="button" aria-label="Mes anterior">◀</button>
-        <h2 id="currentMonth" aria-live="polite">Mes Año</h2>
-        <button id="btnNextMonth" class="btn ghost" type="button" aria-label="Mes siguiente">▶</button>
+      <div class="toolbar-left" role="group" aria-label="Cambiar mes">
+        <button id="btnPrevMonth" class="btn ghost" type="button" aria-label="Mes anterior" title="Mes anterior">
+          ◀
+        </button>
+
+        <h2 id="currentMonth" aria-live="polite" aria-atomic="true">Mes Año</h2>
+
+        <button id="btnNextMonth" class="btn ghost" type="button" aria-label="Mes siguiente" title="Mes siguiente">
+          ▶
+        </button>
       </div>
 
-      <div class="toolbar-right">
-        <button id="btnToday" class="btn ghost" type="button">Hoy</button>
-        <button id="btnNewEvent" class="btn primary" type="button">＋ Nuevo evento</button>
+      <div class="toolbar-right" role="group" aria-label="Acciones">
+        <button id="btnToday" class="btn ghost" type="button" title="Ir a hoy" aria-label="Ir a hoy">
+          Hoy
+        </button>
+        <button id="btnNewEvent" class="btn primary" type="button" title="Crear nuevo evento" aria-label="Crear nuevo evento" aria-haspopup="dialog">
+          ＋ Nuevo evento
+        </button>
       </div>
     </section>
 
@@ -94,14 +121,14 @@
     <section class="overview" aria-label="Resumen">
       <div class="overview-card" id="overviewToday">
         <div class="overview-title">Hoy</div>
-        <div class="overview-body" id="todayList">
+        <div class="overview-body" id="todayList" aria-live="polite">
           <span class="muted">Sin eventos</span>
         </div>
       </div>
 
       <div class="overview-card" id="overviewNext">
         <div class="overview-title">Próximos 7 días</div>
-        <div class="overview-body" id="nextList">
+        <div class="overview-body" id="nextList" aria-live="polite">
           <span class="muted">Sin eventos</span>
         </div>
       </div>
@@ -115,19 +142,35 @@
         <label class="sr-only" for="searchEvents">Buscar eventos</label>
         <input
           id="searchEvents"
-          type="text"
+          type="search"
           placeholder="Buscar por título, notas o responsable…"
           autocomplete="off"
           spellcheck="false"
           inputmode="search"
+          aria-label="Buscar eventos"
         />
       </div>
 
       <div class="controls-right" role="tablist" aria-label="Vista">
-        <button id="btnViewMonth" class="seg active" type="button" aria-selected="true" role="tab">
+        <button
+          id="btnViewMonth"
+          class="seg active"
+          type="button"
+          aria-selected="true"
+          role="tab"
+          aria-controls="monthView"
+        >
           Mes
         </button>
-        <button id="btnViewList" class="seg" type="button" aria-selected="false" role="tab">
+
+        <button
+          id="btnViewList"
+          class="seg"
+          type="button"
+          aria-selected="false"
+          role="tab"
+          aria-controls="listView"
+        >
           Lista
         </button>
       </div>
@@ -142,14 +185,14 @@
       <div class="filter-row">
         <div class="filter-field">
           <label for="filterCategory">Filtrar por categoría</label>
-          <select id="filterCategory">
+          <select id="filterCategory" aria-label="Filtrar por categoría">
             <option value="">Todas las categorías</option>
           </select>
         </div>
 
         <div class="filter-field">
           <label for="filterStatus">Filtrar por estado</label>
-          <select id="filterStatus">
+          <select id="filterStatus" aria-label="Filtrar por estado">
             <option value="">Todos los estados</option>
             <option value="pending">Pendiente</option>
             <option value="done">Hecho</option>
@@ -159,7 +202,7 @@
 
         <div class="filter-field">
           <label for="filterAssignedTo">Filtrar por responsable</label>
-          <select id="filterAssignedTo">
+          <select id="filterAssignedTo" aria-label="Filtrar por responsable">
             <option value="">Todas las personas</option>
           </select>
         </div>
@@ -181,7 +224,7 @@
     <section class="list-view hidden" id="listView" aria-label="Lista de eventos">
       <div class="list-head">
         <h3 id="listTitle">Eventos</h3>
-        <div class="list-meta" id="listMeta" aria-live="polite"></div>
+        <div class="list-meta" id="listMeta" aria-live="polite" aria-atomic="true"></div>
       </div>
 
       <div class="list-body" id="listBody">
@@ -195,6 +238,7 @@
        MODAL EVENTO
        ✅ IDs alineados con ui.js:
           eventAssignedTo + eventRecurrence
+       ✅ Limpio: sin “Eventos del día” (ya lo muestran en overview)
   ======================= -->
   <div
     id="eventModal"
@@ -204,7 +248,7 @@
     aria-labelledby="modalTitle"
     aria-describedby="modalDesc"
   >
-    <div class="modal-content">
+    <div class="modal-content" role="document">
       <div class="modal-head">
         <h3 id="modalTitle">Nuevo evento</h3>
         <p id="modalDesc" class="muted">Crea o edita una tarea del calendario.</p>
@@ -213,25 +257,32 @@
       <form id="eventForm" novalidate>
         <label>
           Título
-          <input type="text" id="eventTitle" required maxlength="120" />
+          <input
+            type="text"
+            id="eventTitle"
+            required
+            maxlength="120"
+            autocomplete="off"
+            placeholder="Ej: Reunión con equipo / Entregar informe…"
+          />
         </label>
 
         <div class="form-2col">
           <label>
             Categoría
-            <select id="eventCategory" required></select>
+            <select id="eventCategory" required aria-label="Categoría"></select>
           </label>
 
           <label>
             Fecha
-            <input type="date" id="eventDate" required />
+            <input type="date" id="eventDate" required aria-label="Fecha" />
           </label>
         </div>
 
         <div class="form-2col">
           <label>
             Estado
-            <select id="eventStatus">
+            <select id="eventStatus" aria-label="Estado">
               <option value="pending">Pendiente</option>
               <option value="done">Hecho</option>
               <option value="cancelled">Cancelado</option>
@@ -240,9 +291,9 @@
 
           <label>
             Responsable
-            <select id="eventAssignedTo">
+            <select id="eventAssignedTo" aria-label="Responsable" autocomplete="off">
               <option value="">Sin asignar</option>
-              <!-- ui.js rellena opciones (idealmente desde ASSIGNEES + existentes) -->
+              <!-- ui.js rellena opciones -->
             </select>
           </label>
         </div>
@@ -250,11 +301,8 @@
         <div class="form-2col">
           <label>
             Repetición
-            <select id="eventRecurrence">
-              <option value="">No repetir</option>
-              <option value="weekly">Semanal</option>
-              <option value="monthly">Mensual</option>
-            </select>
+            <!-- ui.js repuebla esto, así que el HTML solo necesita el select -->
+            <select id="eventRecurrence" aria-label="Repetición"></select>
           </label>
 
           <div aria-hidden="true"></div>
@@ -271,15 +319,15 @@
         </label>
 
         <div class="modal-actions">
-          <button type="button" id="btnDeleteEvent" class="btn danger hidden">
+          <button type="button" id="btnDeleteEvent" class="btn danger hidden" aria-label="Eliminar evento">
             Eliminar
           </button>
 
           <div class="modal-actions-right">
-            <button type="button" id="btnCancelModal" class="btn ghost">
+            <button type="button" id="btnCancelModal" class="btn ghost" aria-label="Cancelar">
               Cancelar
             </button>
-            <button type="submit" class="btn primary" id="btnSaveEvent">
+            <button type="submit" class="btn primary" id="btnSaveEvent" aria-label="Guardar evento">
               Guardar
             </button>
           </div>
@@ -291,11 +339,12 @@
   <!-- Overlay -->
   <div id="modalOverlay" class="overlay hidden" aria-hidden="true"></div>
 
-  <!-- Toast host (si no se usa, no molesta) -->
+  <!-- Toast host -->
   <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 
   <!-- ======================
        SCRIPTS
+       Nota: mantener el orden ayuda a evitar “undefined imports”
   ======================= -->
   <script type="module" src="js/firebase.js"></script>
   <script type="module" src="js/auth.js"></script>
