@@ -1,20 +1,29 @@
 /* =============================================================================
-  js/ui.js — UI del calendario (render + modal + filtros) — vPRO++++++ (CLEAN MODAL)
+  js/ui.js — UI del calendario (render + modal + filtros) — vPRO∞ (RECURRENCE PRO)
   -----------------------------------------------------------------------------
   - Render grilla mensual (6x7)
   - Chips de eventos por día (compact + @asignado)
   - ✅ Quick toggle done/pending sin abrir modal (accesible teclado + UX rápida)
-  - Modal crear/editar (Asignado a + Repetición)
+  - Modal crear/editar (Asignado a + Repetición PRO)
   - Filtros: categoría, estado, persona
   - Búsqueda: título, notas, persona (con debounce)
   - Vistas: Mes / Lista
   - ✅ Overview: Hoy + Próximos 7 compacto
-  - ✅ Recurrentes: "" | "weekly" | "monthly" | "yearly" (expansión solo rango visible)
-  - ✅ Modal limpio: se quitó “Eventos de este día” (ya existe overview afuera)
+  - ✅ Recurrentes PRO:
+      recurrence: null | { type:"interval", unit:"day|week|month|year", interval:number }
+    Backward compatible: "" | "weekly" | "monthly" | "yearly"
+  - ✅ Modal limpio + enhancements
 ============================================================================= */
 
 import {
-  CATEGORIES,
+  getCategories,
+  setCategories,
+  resetCategories,
+  DEFAULT_CATEGORIES,
+  getAssignees,
+  setAssignees,
+  resetAssignees,
+  DEFAULT_ASSIGNEES,
   EVENT_STATUS,
   STATUS_COLORS,
   CALENDAR_CONFIG,
@@ -74,7 +83,7 @@ const $eventNotes    = qs("#eventNotes");
 
 // Asignado + recurrencia (si no existen, no rompe)
 const $eventAssignedTo = qs("#eventAssignedTo");
-const $eventRecurrence = qs("#eventRecurrence");
+const $eventRecurrence = qs("#eventRecurrence"); // puede ser select o input hidden; lo soportamos igual
 
 const $toastHost = qs("#toastHost");
 
@@ -98,6 +107,9 @@ let UI_STATE = {
   monthIndex: new Date().getMonth(),
 
   rawEvents: [],    // tal cual viene de db
+
+  categories: getCategories(), // categorías editables (localStorage override)
+
   events: [],       // incluye expansión recurrentes (rango visible)
 
   filterCategory: "",
@@ -118,7 +130,12 @@ let UI_STATE = {
 /* =========================
    Helpers categorías/labels
 ========================= */
-const CAT_BY_ID = new Map(CATEGORIES.map(c => [c.id, c]));
+let CAT_BY_ID = new Map();
+
+function rebuildCategoryMap() {
+  const cats = Array.isArray(UI_STATE.categories) ? UI_STATE.categories : getCategories();
+  CAT_BY_ID = new Map(cats.map(c => [c.id, c]));
+}
 
 function catLabel(id) {
   return CAT_BY_ID.get(id)?.label || id || "Sin categoría";
@@ -126,15 +143,100 @@ function catLabel(id) {
 function catColor(id) {
   return CAT_BY_ID.get(id)?.color || "#64748B";
 }
+
 function statusLabel(id) {
   return EVENT_STATUS.find(s => s.id === id)?.label || id || "Pendiente";
 }
-function recurrenceLabel(id) {
-  const r = String(id || "");
-  if (r === "weekly") return "Semanal";
-  if (r === "monthly") return "Mensual";
-  if (r === "yearly") return "Anual";
-  return "";
+
+/* =========================
+   Recurrence PRO helpers
+========================= */
+function normTextLocal(v) {
+  return String(v ?? "").trim().toLowerCase();
+}
+
+function normalizeRecurrence(raw) {
+  // vacíos
+  if (raw === null || raw === undefined || raw === "") return null;
+
+  // Legacy strings
+  if (typeof raw === "string") {
+    const s = normTextLocal(raw);
+
+    if (s === "weekly")  return { type: "interval", unit: "week",  interval: 1 };
+    if (s === "monthly") return { type: "interval", unit: "month", interval: 1 };
+    if (s === "yearly")  return { type: "interval", unit: "year",  interval: 1 };
+
+    // JSON string
+    if (s.startsWith("{") && s.endsWith("}")) {
+      try {
+        return normalizeRecurrence(JSON.parse(raw));
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // Object
+  if (typeof raw === "object") {
+    const unit = normTextLocal(raw.unit || raw.everyUnit || raw.frequency || "");
+    const interval = parseInt(raw.interval ?? raw.every ?? raw.count ?? 1, 10);
+
+    if (!["day","week","month","year"].includes(unit)) return null;
+    if (!Number.isFinite(interval) || interval < 1 || interval > 100) return null;
+
+    return { type: "interval", unit, interval };
+  }
+
+  return null;
+}
+
+function recurrenceToSelectValue(rec) {
+  const r = normalizeRecurrence(rec);
+  if (!r) return "";
+  // Para select usamos JSON string para opciones avanzadas
+  return JSON.stringify({ unit: r.unit, interval: r.interval });
+}
+
+function parseRecurrenceFromControlValue(value) {
+  const v = String(value ?? "").trim();
+  if (!v) return null;
+
+  // Si viene legacy
+  if (["weekly","monthly","yearly"].includes(v)) return normalizeRecurrence(v);
+
+  // Si viene JSON
+  if (v.startsWith("{") && v.endsWith("}")) {
+    try { return normalizeRecurrence(JSON.parse(v)); } catch (_) { return null; }
+  }
+
+  // Si viene algo raro: no repetimos
+  return null;
+}
+
+function recurrenceLabel(rec) {
+  const r = normalizeRecurrence(rec);
+  if (!r) return "";
+
+  const { unit, interval } = r;
+
+  // Nombres bonitos
+  const unitLabel = (u, n) => {
+    if (u === "day")   return n === 1 ? "día" : "días";
+    if (u === "week")  return n === 1 ? "semana" : "semanas";
+    if (u === "month") return n === 1 ? "mes" : "meses";
+    if (u === "year")  return n === 1 ? "año" : "años";
+    return u;
+  };
+
+  // Atajos “humanos”
+  if (unit === "week"  && interval === 1) return "Semanal";
+  if (unit === "month" && interval === 1) return "Mensual";
+  if (unit === "month" && interval === 6) return "Semestral";
+  if (unit === "year"  && interval === 1) return "Anual";
+
+  return `Cada ${interval} ${unitLabel(unit, interval)}`;
 }
 
 /* =========================
@@ -146,9 +248,17 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
   UI_STATE.onUpdate   = onUpdate   || null;
   UI_STATE.onDelete   = onDelete   || null;
 
+  UI_STATE.categories = getCategories();
+  rebuildCategoryMap();
   populateCategorySelects();
+  ensureCategoryManagerUI();
+
+  // Responsables editables
+  ensureAssigneeManagerUI();
+
   populateStatusSelects();
-  populateRecurrenceSelect();
+  populateRecurrenceSelect();        // 👈 ahora PRO
+  ensureRecurrenceAdvancedUI();      // 👈 UI progresiva “cada X”
 
   // Inicial: no depende de eventos. Mete ASSIGNEES sí o sí.
   populateAssignedSelect([]);
@@ -360,6 +470,7 @@ export function setEvents(events = []) {
   populateAssignedSelect(UI_STATE.rawEvents);
   populateAssignedToModal(UI_STATE.rawEvents);
   populateRecurrenceSelect();
+  ensureRecurrenceAdvancedUI();
 
   UI_STATE.events = expandRecurringForVisibleRange(UI_STATE.rawEvents, UI_STATE.year, UI_STATE.monthIndex);
 
@@ -520,7 +631,7 @@ function renderList(year, monthIndex, events = []) {
     const st = ev.status || "pending";
     const cat = ev.category || "otro";
     const who = (ev.assignedTo || "").trim();
-    const rec = (ev.recurrence || "").trim();
+    const rec = recurrenceLabel(ev.recurrence);
 
     row.innerHTML = `
       <span class="list-dot" style="background:${catColor(cat)}"></span>
@@ -530,7 +641,7 @@ function renderList(year, monthIndex, events = []) {
           <span class="list-pill">${escapeHtml(catLabel(cat))}</span>
           <span class="list-pill status">${escapeHtml(statusLabel(st))}</span>
           ${who ? `<span class="list-pill who">@${escapeHtml(who)}</span>` : ""}
-          ${rec ? `<span class="list-pill rec">${escapeHtml(recurrenceLabel(rec))}</span>` : ""}
+          ${rec ? `<span class="list-pill rec">${escapeHtml(rec)}</span>` : ""}
           ${ev._virtualFromId ? `<span class="list-pill ghost">Ocurrencia</span>` : ""}
         </span>
       </span>
@@ -649,14 +760,14 @@ function renderChip(ev) {
   const cat = ev.category || "otro";
   const st  = ev.status || "pending";
   const who = (ev.assignedTo || "").trim();
-  const rec = (ev.recurrence || "").trim();
+  const recLabel = recurrenceLabel(ev.recurrence);
 
   chip.style.borderLeftColor = catColor(cat);
   if (st === "done") chip.classList.add("is-done");
   if (st === "cancelled") chip.classList.add("is-cancelled");
 
   const titleBits = [
-    `${catLabel(cat)} · ${statusLabel(st)}${rec ? ` · ${recurrenceLabel(rec)}` : ""}`,
+    `${catLabel(cat)} · ${statusLabel(st)}${recLabel ? ` · ${recLabel}` : ""}`,
     who ? `@${who}` : "",
     ev._virtualFromId ? "Ocurrencia (no guardada)" : "",
     ev.notes ? ev.notes : ""
@@ -711,7 +822,7 @@ function quickToggleDone(eventId) {
 
   const next = (st === "done") ? "pending" : "done";
 
-  // Optimistic UI: cambia local ya, para que se sienta instantáneo
+  // Optimistic UI
   raw.status = next;
   rerender();
 
@@ -730,10 +841,11 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
   UI_STATE.editingId = null;
   if ($modalTitle) $modalTitle.textContent = "Nuevo evento";
 
-  const baseCat = CATEGORIES[0]?.id || "otro";
+  const baseCat = (UI_STATE.categories?.[0]?.id) || "otro";
 
   populateAssignedToModal(UI_STATE.rawEvents);
   populateRecurrenceSelect();
+  ensureRecurrenceAdvancedUI();
 
   if ($eventTitle) $eventTitle.value = prefillFromEvent?.title ? String(prefillFromEvent.title) : "";
   if ($eventCategory) $eventCategory.value = prefillFromEvent?.category ? String(prefillFromEvent.category) : baseCat;
@@ -742,7 +854,9 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
   if ($eventNotes) $eventNotes.value = prefillFromEvent?.notes ? String(prefillFromEvent.notes) : "";
 
   if ($eventAssignedTo) $eventAssignedTo.value = prefillFromEvent?.assignedTo ? String(prefillFromEvent.assignedTo) : "";
-  if ($eventRecurrence) $eventRecurrence.value = ""; // virtual => no hereda por defecto
+
+  // Por defecto: ocurrencia virtual NO hereda repetición automáticamente
+  setRecurrenceControlsValue(null);
 
   hide($btnDeleteEvent);
 
@@ -758,15 +872,17 @@ function openModalForEdit(ev) {
 
   populateAssignedToModal(UI_STATE.rawEvents, ev.assignedTo || "");
   populateRecurrenceSelect();
+  ensureRecurrenceAdvancedUI();
 
   if ($eventTitle) $eventTitle.value = ev.title || "";
-  if ($eventCategory) $eventCategory.value = ev.category || (CATEGORIES[0]?.id || "otro");
+  if ($eventCategory) $eventCategory.value = ev.category || (UI_STATE.categories?.[0]?.id || "otro");
   if ($eventDate) $eventDate.value = ev.dateISO || "";
   if ($eventStatus) $eventStatus.value = ev.status || "pending";
   if ($eventNotes) $eventNotes.value = ev.notes || "";
 
   if ($eventAssignedTo) $eventAssignedTo.value = ev.assignedTo || "";
-  if ($eventRecurrence) $eventRecurrence.value = ev.recurrence || "";
+
+  setRecurrenceControlsValue(ev.recurrence);
 
   show($btnDeleteEvent);
 
@@ -784,7 +900,7 @@ function readModalPayload() {
   const notes = ($eventNotes?.value || "").trim();
 
   const assignedTo = ($eventAssignedTo?.value || "").trim();
-  const recurrence = ($eventRecurrence?.value || "").trim();
+  const recurrence = readRecurrenceFromModal(); // 👈 objeto o null
 
   const problems = [];
   if (!title) problems.push("Ponle un título al evento.");
@@ -795,8 +911,12 @@ function readModalPayload() {
     problems.push("La fecha debe estar en formato yyyy-mm-dd.");
   }
 
-  if (recurrence && !["weekly","monthly","yearly"].includes(recurrence)) {
-    problems.push("Repetición inválida (semanal/mensual/anual).");
+  // Validación recurrence
+  if (recurrence) {
+    const u = recurrence.unit;
+    const n = recurrence.interval;
+    if (!["day","week","month","year"].includes(u)) problems.push("Repetición inválida (unidad).");
+    if (!Number.isFinite(n) || n < 1 || n > 100) problems.push("Repetición inválida (intervalo).");
   }
 
   if (problems.length) {
@@ -807,6 +927,7 @@ function readModalPayload() {
     return null;
   }
 
+  // db.js ya acepta objeto recurrence (y también tolera legacy/JSON).
   return { title, category, dateISO, status, notes, assignedTo, recurrence };
 }
 
@@ -824,41 +945,389 @@ function closeModal() {
 }
 
 /* =========================
-   Modal Enhancements (LIMPIO)
-   - Quitamos “Eventos de este día”
-   - Duplicar: ahora duplica campos en el modal (no crea sin preguntar)
+   Recurrence UI (PROGRESIVA)
+   - Si #eventRecurrence es select: opciones + JSON values
+   - Además inyectamos "Cada X" (input + unidad) si se puede
 ========================= */
+let $recWrap = null;
+let $recToggle = null;
+let $recEvery = null;
+let $recUnit = null;
+
+function ensureRecurrenceAdvancedUI() {
+  if (!$eventRecurrence) return;
+
+  // Buscamos contenedor natural
+  const parent = $eventRecurrence.parentElement || null;
+  if (!parent) return;
+
+  // Evitar duplicar
+  if (parent.querySelector(".rec-adv")) {
+    // refrescar refs
+    $recWrap = parent.querySelector(".rec-adv");
+    $recToggle = parent.querySelector("#recToggle");
+    $recEvery = parent.querySelector("#recEvery");
+    $recUnit = parent.querySelector("#recUnit");
+    return;
+  }
+
+  // Inyectar UI compacta
+  const wrap = document.createElement("div");
+  wrap.className = "rec-adv";
+  wrap.style.display = "grid";
+  wrap.style.gridTemplateColumns = "1fr";
+  wrap.style.gap = "8px";
+  wrap.style.marginTop = "8px";
+
+  wrap.innerHTML = `
+    <label class="rec-adv-row" style="display:flex;align-items:center;gap:10px;">
+      <input type="checkbox" id="recToggle" />
+      <span style="font-weight:600;">Repetir</span>
+      <span class="muted" style="margin-left:auto;font-size:12px;">(cada X)</span>
+    </label>
+
+    <div class="rec-adv-controls hidden" id="recControls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <span class="muted" style="font-size:12px;">Cada</span>
+      <input type="number" id="recEvery" min="1" max="100" value="1"
+             style="width:90px;padding:10px 12px;border-radius:12px;border:1px solid rgba(11,16,32,.16);background:rgba(255,255,255,.7);" />
+      <select id="recUnit"
+              style="min-width:160px;padding:10px 12px;border-radius:12px;border:1px solid rgba(11,16,32,.16);background:rgba(255,255,255,.7);">
+        <option value="day">Día(s)</option>
+        <option value="week">Semana(s)</option>
+        <option value="month">Mes(es)</option>
+        <option value="year">Año(s)</option>
+      </select>
+
+      <button type="button" class="btn ghost tiny" id="recApplyPreset">Aplicar</button>
+      <span class="muted" id="recHint" style="font-size:12px;"></span>
+    </div>
+  `;
+
+  parent.appendChild(wrap);
+
+  // refs
+  $recWrap = wrap;
+  $recToggle = wrap.querySelector("#recToggle");
+  $recEvery = wrap.querySelector("#recEvery");
+  $recUnit = wrap.querySelector("#recUnit");
+  const $controls = wrap.querySelector("#recControls");
+  const $hint = wrap.querySelector("#recHint");
+  const $apply = wrap.querySelector("#recApplyPreset");
+
+  const updateHint = () => {
+    const on = !!$recToggle?.checked;
+    if (!on) { if ($hint) $hint.textContent = ""; return; }
+    const unit = $recUnit?.value || "week";
+    const n = parseInt($recEvery?.value || "1", 10) || 1;
+    const label = recurrenceLabel({ unit, interval: n });
+    if ($hint) $hint.textContent = label ? `→ ${label}` : "";
+  };
+
+  $recToggle?.addEventListener("change", () => {
+    $controls?.classList.toggle("hidden", !$recToggle.checked);
+    updateHint();
+
+    if (!$recToggle.checked) {
+      // apagar repetición
+      setRecurrenceControlsValue(null);
+    } else {
+      // si prenden, usar lo que esté puesto en los inputs
+      const unit = $recUnit?.value || "week";
+      const n = parseInt($recEvery?.value || "1", 10) || 1;
+      setRecurrenceControlsValue({ unit, interval: n });
+    }
+  });
+
+  $recEvery?.addEventListener("input", updateHint);
+  $recUnit?.addEventListener("change", updateHint);
+
+  $apply?.addEventListener("click", () => {
+    if (!$recToggle?.checked) $recToggle.checked = true;
+    $controls?.classList.remove("hidden");
+    const unit = $recUnit?.value || "week";
+    const n = clampInt($recEvery?.value, 1, 100, 1);
+    setRecurrenceControlsValue({ unit, interval: n });
+    updateHint();
+  });
+
+  updateHint();
+}
+
+function populateRecurrenceSelect() {
+  if (!$eventRecurrence) return;
+
+  // Si no es select, no intentamos poblar options
+  const isSelect = ($eventRecurrence.tagName || "").toLowerCase() === "select";
+  if (!isSelect) return;
+
+  const prev = String($eventRecurrence.value || "").trim();
+
+  // Opciones base + pro (JSON)
+  const opts = [
+    { value: "", label: "—" },
+
+    // Atajos legibles (valores JSON)
+    { value: JSON.stringify({ unit: "day", interval: 1 }),   label: "Diario" },
+    { value: JSON.stringify({ unit: "week", interval: 1 }),  label: "Semanal" },
+    { value: JSON.stringify({ unit: "week", interval: 2 }),  label: "Cada 2 semanas" },
+    { value: JSON.stringify({ unit: "week", interval: 3 }),  label: "Cada 3 semanas" },
+    { value: JSON.stringify({ unit: "month", interval: 1 }), label: "Mensual" },
+    { value: JSON.stringify({ unit: "month", interval: 2 }), label: "Cada 2 meses" },
+    { value: JSON.stringify({ unit: "month", interval: 3 }), label: "Cada 3 meses" },
+    { value: JSON.stringify({ unit: "month", interval: 6 }), label: "Semestral" },
+    { value: JSON.stringify({ unit: "year", interval: 1 }),  label: "Anual" },
+    { value: JSON.stringify({ unit: "year", interval: 2 }),  label: "Cada 2 años" }
+  ];
+
+  $eventRecurrence.innerHTML = "";
+  for (const o of opts) {
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = o.label;
+    $eventRecurrence.appendChild(opt);
+  }
+
+  // si prev era legacy, conviértelo
+  const prevRec = parseRecurrenceFromControlValue(prev);
+  const prevVal = recurrenceToSelectValue(prevRec);
+
+  if (opts.some(o => o.value === prevVal)) $eventRecurrence.value = prevVal;
+  else $eventRecurrence.value = ""; // fallback
+
+  // Si cambian select, sincroniza advanced UI
+  if (!$eventRecurrence._recBound) {
+    $eventRecurrence.addEventListener("change", () => {
+      const rec = parseRecurrenceFromControlValue($eventRecurrence.value);
+      syncAdvancedRecUI(rec);
+    });
+    $eventRecurrence._recBound = true;
+  }
+}
+
+function setRecurrenceControlsValue(rec) {
+  const r = normalizeRecurrence(rec);
+
+  // select: set value to JSON
+  if ($eventRecurrence) {
+    const isSelect = ($eventRecurrence.tagName || "").toLowerCase() === "select";
+    if (isSelect) {
+      $eventRecurrence.value = recurrenceToSelectValue(r);
+    } else {
+      // si era input/hiddens: guarda JSON string
+      $eventRecurrence.value = r ? recurrenceToSelectValue(r) : "";
+    }
+  }
+
+  // advanced controls
+  syncAdvancedRecUI(r);
+}
+
+function syncAdvancedRecUI(rec) {
+  const r = normalizeRecurrence(rec);
+
+  if (!$recWrap) return;
+  const $controls = $recWrap.querySelector("#recControls");
+  const $hint = $recWrap.querySelector("#recHint");
+
+  if (!$recToggle || !$recEvery || !$recUnit) return;
+
+  if (!r) {
+    $recToggle.checked = false;
+    $controls?.classList.add("hidden");
+    if ($hint) $hint.textContent = "";
+    return;
+  }
+
+  $recToggle.checked = true;
+  $controls?.classList.remove("hidden");
+  $recEvery.value = String(r.interval || 1);
+  $recUnit.value = r.unit || "week";
+  if ($hint) $hint.textContent = `→ ${recurrenceLabel(r)}`;
+}
+
+function readRecurrenceFromModal() {
+  // Preferimos advanced UI si existe y está activada
+  if ($recToggle && $recEvery && $recUnit && $recToggle.checked) {
+    const interval = clampInt($recEvery.value, 1, 100, 1);
+    const unit = String($recUnit.value || "week").trim();
+    return normalizeRecurrence({ unit, interval });
+  }
+
+  // fallback: select/input #eventRecurrence
+  if ($eventRecurrence) {
+    const v = String($eventRecurrence.value || "").trim();
+    return parseRecurrenceFromControlValue(v);
+  }
+
+  return null;
+}
+
+/* =========================
+   Agenda del día (dentro del modal)
+========================= */
+function buildDayAgendaUI(modalContent){
+  const head = modalContent.querySelector(".modal-head");
+  const form = modalContent.querySelector("#eventForm");
+  if (!head || !form) return;
+
+  if (!modalContent.querySelector("#dayAgendaBar")){
+    const bar = document.createElement("div");
+    bar.id = "dayAgendaBar";
+    bar.className = "day-agenda-bar";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "btnViewDayAgenda";
+    btn.className = "btn ghost";
+    btn.textContent = "Ver eventos del día";
+    btn.setAttribute("aria-haspopup","false");
+
+    bar.appendChild(btn);
+    head.appendChild(bar);
+  }
+
+  if (!modalContent.querySelector("#dayAgendaWrap")){
+    const wrap = document.createElement("section");
+    wrap.id = "dayAgendaWrap";
+    wrap.className = "day-agenda hidden";
+    wrap.setAttribute("aria-label", "Eventos del día");
+
+    wrap.innerHTML = `
+      <div class="day-agenda-head">
+        <div class="day-agenda-title">Eventos del día</div>
+        <div class="day-agenda-actions">
+          <button type="button" id="btnAgendaToday" class="btn ghost tiny">Hoy</button>
+          <button type="button" id="btnAgendaClose" class="btn ghost tiny">Cerrar</button>
+        </div>
+      </div>
+      <div id="dayAgendaMeta" class="day-agenda-meta muted"></div>
+      <div id="dayAgendaList" class="day-agenda-list"></div>
+    `;
+
+    form.parentNode.insertBefore(wrap, form);
+  }
+}
+
+function sortAgendaEvents(a,b){
+  const sa = String(a?.status || "pending");
+  const sb = String(b?.status || "pending");
+  const rank = (s)=> (s === "pending" ? 0 : s === "cancelled" ? 1 : 2);
+  const ra = rank(sa), rb = rank(sb);
+  if (ra !== rb) return ra - rb;
+  const ta = String(a?.title || "").toLowerCase();
+  const tb = String(b?.title || "").toLowerCase();
+  return ta.localeCompare(tb);
+}
+
+function renderDayAgenda(dateISO){
+  const modalContent = $eventModal?.querySelector(".modal-content");
+  const wrap = modalContent?.querySelector("#dayAgendaWrap");
+  const meta = modalContent?.querySelector("#dayAgendaMeta");
+  const list = modalContent?.querySelector("#dayAgendaList");
+  if (!wrap || !meta || !list) return;
+
+  const iso = (dateISO && String(dateISO).trim()) ? String(dateISO).trim() : "";
+  const all = (UI_STATE.events || []).filter(ev => String(ev.dateISO || "") === iso);
+  all.sort(sortAgendaEvents);
+
+  meta.textContent = iso ? `${iso} · ${all.length} evento${all.length === 1 ? "" : "s"}` : "";
+
+  if (!iso){
+    list.innerHTML = `<div class="muted">Elige una fecha para ver la agenda.</div>`;
+    return;
+  }
+
+  if (!all.length){
+    list.innerHTML = `<div class="muted">Sin eventos en este día.</div>`;
+    return;
+  }
+
+  list.innerHTML = all.map(ev => {
+    const title = escapeHtml(ev.title || "(Sin título)");
+    const cat = escapeHtml(catLabel(ev.category));
+    const who = escapeHtml(String(ev.assignedTo || "").trim() || "Sin asignar");
+    const st  = escapeHtml(statusLabel(ev.status));
+    const rec = ev._virtualFromId ? `<span class="agenda-pill rec">Recurrente</span>` : "";
+
+    return `
+      <button type="button" class="agenda-item" data-agenda-id="${escapeHtml(ev.id)}">
+        <div class="agenda-main">
+          <div class="agenda-title">${title}</div>
+          <div class="agenda-sub">
+            <span class="agenda-pill">${cat}</span>
+            <span class="agenda-pill status">${st}</span>
+            <span class="agenda-pill who">@${who}</span>
+            ${rec}
+          </div>
+        </div>
+        <div class="agenda-arrow" aria-hidden="true">›</div>
+      </button>
+    `;
+  }).join("");
+
+  if (!list._agendaBound){
+    list.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-agenda-id]");
+      if (!btn) return;
+      const id = btn.getAttribute("data-agenda-id");
+      const ev = (UI_STATE.events || []).find(x => x.id === id);
+      if (!ev) return;
+
+      if (ev._virtualFromId) {
+        openModalForNew(ev.dateISO, ev);
+        return;
+      }
+      openModalForEdit(ev);
+    });
+    list._agendaBound = true;
+  }
+}
+
 function ensureModalEnhancements() {
   const modalContent = $eventModal?.querySelector(".modal-content");
   if (!modalContent) return;
 
-  // Botón duplicar (solo una vez)
-  const actionsRight = modalContent.querySelector(".modal-actions-right");
-  if (actionsRight && !modalContent.querySelector("#btnDuplicateEvent")) {
-    const dup = document.createElement("button");
-    dup.type = "button";
-    dup.id = "btnDuplicateEvent";
-    dup.className = "btn ghost";
-    dup.textContent = "Duplicar";
+  buildDayAgendaUI(modalContent);
 
-    dup.addEventListener("click", () => {
-      const payload = readModalPayload();
-      if (!payload) return;
+  const wrap = modalContent.querySelector("#dayAgendaWrap");
+  const btnView = modalContent.querySelector("#btnViewDayAgenda");
+  const btnClose = modalContent.querySelector("#btnAgendaClose");
+  const btnToday = modalContent.querySelector("#btnAgendaToday");
 
-      // En vez de crear y cerrar (sorpresa), abrimos "nuevo duplicado" editable
-      UI_STATE.editingId = null;
-      if ($modalTitle) $modalTitle.textContent = "Nuevo evento (duplicado)";
-      hide($btnDeleteEvent);
-
-      if ($eventTitle) $eventTitle.value = payload.title ? `${payload.title} (copia)` : "Evento (copia)";
-      // Mantener categoría/fecha/estado/nota/responsable/recurrencia tal cual
-      // (si quieren, se puede limpiar recurrencia aquí)
-      notify("Duplicado listo ✨ Ajusta lo que quieras y guarda.", { mode: "toast", ms: 1600 });
-      setTimeout(() => $eventTitle?.focus(), 0);
+  if (btnView && !btnView._agendaBound){
+    btnView.addEventListener("click", () => {
+      if (!wrap) return;
+      wrap.classList.toggle("hidden");
+      if (!wrap.classList.contains("hidden")) {
+        renderDayAgenda($eventDate?.value || "");
+      }
     });
+    btnView._agendaBound = true;
+  }
 
-    const submitBtn = actionsRight.querySelector("button[type='submit']");
-    actionsRight.insertBefore(dup, submitBtn || null);
+  if (btnClose && !btnClose._agendaBound){
+    btnClose.addEventListener("click", () => {
+      wrap?.classList.add("hidden");
+    });
+    btnClose._agendaBound = true;
+  }
+
+  if (btnToday && !btnToday._agendaBound){
+    btnToday.addEventListener("click", () => {
+      const iso = toISODateLocal(new Date());
+      if ($eventDate) $eventDate.value = iso;
+      renderDayAgenda(iso);
+      wrap?.classList.remove("hidden");
+    });
+    btnToday._agendaBound = true;
+  }
+
+  if ($eventDate && !($eventDate._agendaBound)){
+    $eventDate.addEventListener("change", () => {
+      const isOpen = !wrap?.classList.contains("hidden");
+      if (isOpen) renderDayAgenda($eventDate.value || "");
+    });
+    $eventDate._agendaBound = true;
   }
 }
 
@@ -923,7 +1392,8 @@ function applyFilters(events) {
         ev.notes || "",
         ev.assignedTo || "",
         ev.category || "",
-        ev.status || ""
+        ev.status || "",
+        recurrenceLabel(ev.recurrence) || ""
       ].join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
     }
@@ -941,7 +1411,7 @@ function populateCategorySelects() {
     $filterCategory.innerHTML = "";
     if (keep) $filterCategory.appendChild(keep);
 
-    for (const c of CATEGORIES) {
+    for (const c of (UI_STATE.categories || getCategories())) {
       const opt = document.createElement("option");
       opt.value = c.id;
       opt.textContent = c.label;
@@ -951,7 +1421,7 @@ function populateCategorySelects() {
 
   if ($eventCategory) {
     $eventCategory.innerHTML = "";
-    for (const c of CATEGORIES) {
+    for (const c of (UI_STATE.categories || getCategories())) {
       const opt = document.createElement("option");
       opt.value = c.id;
       opt.textContent = c.label;
@@ -972,31 +1442,8 @@ function populateStatusSelects() {
   }
 }
 
-function populateRecurrenceSelect() {
-  if (!$eventRecurrence) return;
-
-  const prev = ($eventRecurrence.value || "").trim();
-
-  const opts = [
-    { value: "", label: "—" },
-    { value: "weekly", label: "Semanal" },
-    { value: "monthly", label: "Mensual" },
-    { value: "yearly", label: "Anual" }
-  ];
-
-  $eventRecurrence.innerHTML = "";
-  for (const o of opts) {
-    const opt = document.createElement("option");
-    opt.value = o.value;
-    opt.textContent = o.label;
-    $eventRecurrence.appendChild(opt);
-  }
-
-  if (opts.some(o => o.value === prev)) $eventRecurrence.value = prev;
-}
-
 function getMergedAssigneesFrom(events = []) {
-  const fixed = Array.isArray(ASSIGNEES) ? ASSIGNEES : [];
+  const fixed = Array.isArray(getAssignees?.()) ? getAssignees() : (Array.isArray(ASSIGNEES) ? ASSIGNEES : []);
   const dynamic = (events || [])
     .map(e => String(e.assignedTo || "").trim())
     .filter(Boolean);
@@ -1077,7 +1524,7 @@ function buildWeekdayHeaders() {
 }
 
 /* =========================
-   Recurrentes: expansión en rango visible
+   Recurrentes: expansión en rango visible (PRO)
 ========================= */
 function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
   const events = Array.isArray(rawEvents) ? rawEvents : [];
@@ -1091,19 +1538,13 @@ function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
   for (const ev of events) {
     out.push(ev);
 
-    const rec = String(ev.recurrence || "").trim();
-    if (!rec) continue;
-
     const startISO = String(ev.dateISO || "").trim();
     if (!startISO) continue;
 
-    if (rec === "weekly") {
-      out.push(...expandWeekly(ev, startISO, fromISO, toISO));
-    } else if (rec === "monthly") {
-      out.push(...expandMonthly(ev, startISO, fromISO, toISO));
-    } else if (rec === "yearly") {
-      out.push(...expandYearly(ev, startISO, fromISO, toISO));
-    }
+    const rec = normalizeRecurrence(ev.recurrence);
+    if (!rec) continue;
+
+    out.push(...expandInterval(ev, startISO, fromISO, toISO, rec.unit, rec.interval));
   }
 
   // Dedup limpio
@@ -1119,67 +1560,77 @@ function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
   return cleaned;
 }
 
-function expandWeekly(ev, startISO, fromISO, toISO) {
+function expandInterval(ev, startISO, fromISO, toISO, unit, interval) {
   const res = [];
-  let cur = isoToDate(startISO);
+
+  const startD = isoToDate(startISO);
   const fromD = isoToDate(fromISO);
-  const toD = isoToDate(toISO);
+  const toD   = isoToDate(toISO);
 
-  while (cur < fromD) cur = addDays(cur, 7);
+  // Vamos generando ocurrencias desde start hasta cubrir rango visible
+  let cur = new Date(startD);
 
-  while (cur <= toD) {
+  // Adelantar hasta >= fromD (sin bucle infinito)
+  let guard = 0;
+  while (cur < fromD && guard < 5000) {
+    cur = addByUnit(cur, unit, interval, startD);
+    guard++;
+  }
+
+  // Generar hasta toD
+  guard = 0;
+  while (cur <= toD && guard < 5000) {
     const iso = toISODateLocal(cur);
     if (iso !== startISO) res.push(makeVirtualOccurrence(ev, iso));
-    cur = addDays(cur, 7);
+    cur = addByUnit(cur, unit, interval, startD);
+    guard++;
   }
 
   return res;
 }
 
-function expandMonthly(ev, startISO, fromISO, toISO) {
-  const res = [];
+/**
+ * addByUnit:
+ * - day/week: suma días
+ * - month/year: conserva "día objetivo" del start (ej 31 -> clamp al último día del mes)
+ */
+function addByUnit(date, unit, interval, anchorStartDate) {
+  const d = new Date(date);
+  const n = Number(interval || 1);
 
-  const start = isoToDate(startISO);
-  const fromD = isoToDate(fromISO);
-  const toD   = isoToDate(toISO);
-
-  let cur = new Date(fromD.getFullYear(), fromD.getMonth(), start.getDate(), 0,0,0,0);
-
-  while (cur < start) cur = addMonthsSafe(cur, 1);
-  while (cur < fromD) cur = addMonthsSafe(cur, 1);
-
-  while (cur <= toD) {
-    const iso = toISODateLocal(cur);
-    if (iso !== startISO) res.push(makeVirtualOccurrence(ev, iso));
-    cur = addMonthsSafe(cur, 1);
+  if (unit === "day") {
+    d.setDate(d.getDate() + n);
+    return d;
   }
 
-  return res;
-}
-
-function expandYearly(ev, startISO, fromISO, toISO) {
-  const res = [];
-  const start = isoToDate(startISO);
-  const fromD = isoToDate(fromISO);
-  const toD   = isoToDate(toISO);
-
-  const targetMonth = start.getMonth();
-  const targetDay   = start.getDate();
-
-  let year = fromD.getFullYear() - 1;
-  while (year <= toD.getFullYear() + 1) {
-    const dt = new Date(year, targetMonth, 1, 0,0,0,0);
-    const last = new Date(year, targetMonth + 1, 0).getDate();
-    dt.setDate(Math.min(targetDay, last));
-
-    if (dt >= fromD && dt <= toD) {
-      const iso = toISODateLocal(dt);
-      if (iso !== startISO) res.push(makeVirtualOccurrence(ev, iso));
-    }
-    year++;
+  if (unit === "week") {
+    d.setDate(d.getDate() + (n * 7));
+    return d;
   }
 
-  return res;
+  const targetDay = (anchorStartDate instanceof Date) ? anchorStartDate.getDate() : d.getDate();
+
+  if (unit === "month") {
+    const y = d.getFullYear();
+    const m = d.getMonth() + n;
+    const base = new Date(y, m, 1, 0,0,0,0);
+    const last = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+    base.setDate(Math.min(targetDay, last));
+    return base;
+  }
+
+  if (unit === "year") {
+    const y = d.getFullYear() + n;
+    const m = d.getMonth();
+    const base = new Date(y, m, 1, 0,0,0,0);
+    const last = new Date(y, m + 1, 0).getDate();
+    base.setDate(Math.min(targetDay, last));
+    return base;
+  }
+
+  // fallback
+  d.setDate(d.getDate() + (n * 7));
+  return d;
 }
 
 function makeVirtualOccurrence(ev, dateISO) {
@@ -1225,14 +1676,10 @@ function addDays(date, days) {
   return d;
 }
 
-function addMonthsSafe(date, months) {
-  const d = (date instanceof Date) ? new Date(date) : new Date(date);
-  const day = d.getDate();
-  d.setDate(1);
-  d.setMonth(d.getMonth() + Number(months || 0));
-  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-  d.setDate(Math.min(day, last));
-  return d;
+function clampInt(value, min, max, fallback) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
 /* =========================
@@ -1256,4 +1703,365 @@ function notify(msg, { mode = "toast", ms = 2200 } = {}) {
     t.classList.add("hide");
     setTimeout(() => t.remove(), 220);
   }, ms);
+}
+
+/* =========================
+   Categorías editables (UI)
+========================= */
+let $categoryModal = null;
+
+function ensureCategoryManagerUI() {
+  if ($filterCategory && !$filterCategory.parentElement?.querySelector(".cat-edit-btn")) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cat-edit-btn";
+    btn.textContent = "Editar";
+    btn.title = "Editar categorías";
+    btn.addEventListener("click", openCategoryManager);
+    $filterCategory.parentElement?.appendChild(btn);
+  }
+
+  if ($eventCategory && !$eventCategory.parentElement?.querySelector(".cat-edit-btn")) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cat-edit-btn";
+    btn.textContent = "Editar";
+    btn.title = "Editar categorías";
+    btn.addEventListener("click", openCategoryManager);
+    $eventCategory.parentElement?.appendChild(btn);
+  }
+
+  if (document.getElementById("categoryModal")) {
+    $categoryModal = document.getElementById("categoryModal");
+    return;
+  }
+
+  const modal = document.createElement("div");
+  modal.id = "categoryModal";
+  modal.className = "cat-modal hidden";
+  modal.innerHTML = `
+    <div class="cat-modal-overlay" data-cat-close></div>
+    <div class="cat-modal-card" role="dialog" aria-modal="true" aria-label="Editar categorías">
+      <div class="cat-modal-head">
+        <h3>Editar categorías</h3>
+        <div class="cat-modal-actions">
+          <button type="button" class="btn ghost" id="btnCatReset" title="Volver a las categorías por defecto">Restaurar</button>
+          <button type="button" class="btn" id="btnCatClose" data-cat-close>Cerrar</button>
+        </div>
+      </div>
+
+      <p class="cat-modal-hint">Cambias nombres/colores aquí y queda guardado en este navegador. Sí, es un poco humano, pero funciona. 🤝</p>
+
+      <div class="cat-list" id="catList"></div>
+
+      <div class="cat-modal-foot">
+        <button type="button" class="btn" id="btnCatAdd">+ Agregar categoría</button>
+        <button type="button" class="btn primary" id="btnCatSave">Guardar cambios</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  $categoryModal = modal;
+
+  modal.querySelectorAll("[data-cat-close]").forEach(el => {
+    el.addEventListener("click", closeCategoryManager);
+  });
+
+  modal.querySelector("#btnCatAdd")?.addEventListener("click", () => {
+    const list = modal.querySelector("#catList");
+    list?.appendChild(renderCategoryRow({ id: "", label: "", color: "#64748B" }, { isNew: true }));
+    list?.querySelector(".cat-row:last-child input")?.focus?.();
+  });
+
+  modal.querySelector("#btnCatSave")?.addEventListener("click", saveCategoryManager);
+  modal.querySelector("#btnCatReset")?.addEventListener("click", () => {
+    const ok = confirm("¿Restaurar las categorías por defecto? (Se pierden tus cambios locales)");
+    if (!ok) return;
+    UI_STATE.categories = resetCategories();
+    rebuildCategoryMap();
+    populateCategorySelects();
+    rerender();
+    renderCategoryManagerList();
+    notify("Categorías restauradas ✅");
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $categoryModal && !$categoryModal.classList.contains("hidden")) {
+      e.preventDefault();
+      closeCategoryManager();
+    }
+  });
+}
+
+function openCategoryManager() {
+  ensureCategoryManagerUI();
+  renderCategoryManagerList();
+  $categoryModal?.classList.remove("hidden");
+}
+
+function closeCategoryManager() {
+  $categoryModal?.classList.add("hidden");
+}
+
+function renderCategoryManagerList() {
+  if (!$categoryModal) return;
+  const list = $categoryModal.querySelector("#catList");
+  if (!list) return;
+
+  list.innerHTML = "";
+  const cats = Array.isArray(UI_STATE.categories) ? UI_STATE.categories : getCategories();
+
+  for (const c of cats) {
+    list.appendChild(renderCategoryRow(c));
+  }
+}
+
+function renderCategoryRow(cat, { isNew = false } = {}) {
+  const row = document.createElement("div");
+  row.className = "cat-row";
+  row.dataset.catId = String(cat?.id || "");
+
+  const locked = (cat?.id === "otro");
+
+  row.innerHTML = `
+    <div class="cat-color">
+      <input type="color" value="${escapeHtml(String(cat?.color || "#64748B"))}" aria-label="Color" ${locked ? "disabled" : ""}/>
+    </div>
+    <div class="cat-main">
+      <input class="cat-label" type="text" placeholder="Nombre (ej: Financiero)" value="${escapeHtml(String(cat?.label || ""))}" aria-label="Nombre de categoría" />
+      <div class="cat-meta">
+        <span class="cat-id">id: <code>${escapeHtml(String(cat?.id || (isNew ? "(se genera)" : "")))}</code></span>
+        ${locked ? `<span class="cat-lock">(obligatoria)</span>` : ``}
+      </div>
+    </div>
+    <div class="cat-actions">
+      ${locked ? `` : `<button type="button" class="btn danger cat-del" title="Eliminar">Eliminar</button>`}
+    </div>
+  `;
+
+  row.querySelector(".cat-del")?.addEventListener("click", async () => {
+    const label = row.querySelector(".cat-label")?.value?.trim() || cat?.label || cat?.id;
+    const id = row.dataset.catId || "";
+    const ok = confirm(`¿Eliminar la categoría "${label}"?\n\nLos eventos que la usen se pasarán a "Otro".`);
+    if (!ok) return;
+
+    const affected = (UI_STATE.rawEvents || []).filter(e => String(e.category || "") === id);
+    if (affected.length && typeof UI_STATE.onUpdate === "function") {
+      notify(`Reasignando ${affected.length} evento(s) a "Otro"...`, { ms: 2600 });
+      for (const ev of affected) {
+        try { await UI_STATE.onUpdate(ev.id, { category: "otro" }); } catch (e) { console.error(e); }
+      }
+    }
+
+    const cats = (UI_STATE.categories || []).filter(c => c.id !== id);
+    UI_STATE.categories = setCategories(cats);
+    rebuildCategoryMap();
+    populateCategorySelects();
+    rerender();
+    renderCategoryManagerList();
+    notify("Categoría eliminada ✅");
+  });
+
+  return row;
+}
+
+function saveCategoryManager() {
+  if (!$categoryModal) return;
+  const list = $categoryModal.querySelector("#catList");
+  if (!list) return;
+
+  const rows = Array.from(list.querySelectorAll(".cat-row"));
+
+  const next = [];
+  for (const row of rows) {
+    const idExisting = String(row.dataset.catId || "").trim();
+    const label = String(row.querySelector(".cat-label")?.value || "").trim();
+    const color = String(row.querySelector("input[type='color']")?.value || "#64748B").trim();
+
+    if (!label) continue;
+    next.push({ id: idExisting || label, label, color });
+  }
+
+  const final = next.length ? next : DEFAULT_CATEGORIES;
+
+  UI_STATE.categories = setCategories(final);
+  rebuildCategoryMap();
+  populateCategorySelects();
+  rerender();
+  renderCategoryManagerList();
+
+  notify("Categorías guardadas ✅");
+  closeCategoryManager();
+}
+
+/* =========================
+   Responsables editables (UI)
+========================= */
+let $assigneeModal = null;
+
+function ensureAssigneeManagerUI() {
+  if ($filterAssignedTo && !$filterAssignedTo.parentElement?.querySelector(".asg-edit-btn")) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cat-edit-btn asg-edit-btn";
+    btn.textContent = "Editar";
+    btn.title = "Editar responsables";
+    btn.addEventListener("click", openAssigneeManager);
+    $filterAssignedTo.parentElement?.appendChild(btn);
+  }
+
+  if ($eventAssignedTo && !$eventAssignedTo.parentElement?.querySelector(".asg-edit-btn")) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cat-edit-btn asg-edit-btn";
+    btn.textContent = "Editar";
+    btn.title = "Editar responsables";
+    btn.addEventListener("click", openAssigneeManager);
+    $eventAssignedTo.parentElement?.appendChild(btn);
+  }
+
+  if (document.getElementById("assigneeModal")) {
+    $assigneeModal = document.getElementById("assigneeModal");
+    return;
+  }
+
+  const modal = document.createElement("div");
+  modal.id = "assigneeModal";
+  modal.className = "cat-modal hidden";
+  modal.innerHTML = `
+    <div class="cat-modal-overlay" data-asg-close></div>
+    <div class="cat-modal-card" role="dialog" aria-modal="true" aria-label="Editar responsables">
+      <div class="cat-modal-head">
+        <h3>Editar responsables</h3>
+        <div class="cat-modal-actions">
+          <button type="button" class="btn ghost" id="btnAsgReset" title="Volver a los responsables por defecto">Restaurar</button>
+          <button type="button" class="btn" id="btnAsgClose" data-asg-close>Cerrar</button>
+        </div>
+      </div>
+
+      <p class="cat-modal-hint">Agrega, renombra o elimina responsables y queda guardado en este navegador. En serio, los humanos inventaron esto y luego se quejan. 🫠</p>
+
+      <div class="cat-list" id="asgList"></div>
+
+      <div class="cat-modal-foot">
+        <button type="button" class="btn" id="btnAsgAdd">+ Agregar responsable</button>
+        <button type="button" class="btn primary" id="btnAsgSave">Guardar cambios</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  $assigneeModal = modal;
+
+  modal.querySelectorAll("[data-asg-close]").forEach(el => {
+    el.addEventListener("click", closeAssigneeManager);
+  });
+
+  modal.querySelector("#btnAsgAdd")?.addEventListener("click", () => {
+    const list = modal.querySelector("#asgList");
+    list?.appendChild(renderAssigneeRow("", { isNew: true }));
+    list?.querySelector(".cat-row:last-child input")?.focus?.();
+  });
+
+  modal.querySelector("#btnAsgSave")?.addEventListener("click", saveAssigneeManager);
+  modal.querySelector("#btnAsgReset")?.addEventListener("click", () => {
+    const ok = confirm("¿Restaurar los responsables por defecto? (Se pierden tus cambios locales)");
+    if (!ok) return;
+    resetAssignees();
+    populateAssignedSelect(UI_STATE.rawEvents);
+    populateAssignedToModal(UI_STATE.rawEvents, ($eventAssignedTo?.value || "").trim());
+    rerender();
+    renderAssigneeManagerList();
+    notify("Responsables restaurados ✅");
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $assigneeModal && !$assigneeModal.classList.contains("hidden")) {
+      e.preventDefault();
+      closeAssigneeManager();
+    }
+  });
+}
+
+function openAssigneeManager() {
+  ensureAssigneeManagerUI();
+  renderAssigneeManagerList();
+  $assigneeModal?.classList.remove("hidden");
+}
+
+function closeAssigneeManager() {
+  $assigneeModal?.classList.add("hidden");
+}
+
+function renderAssigneeManagerList() {
+  if (!$assigneeModal) return;
+  const list = $assigneeModal.querySelector("#asgList");
+  if (!list) return;
+
+  list.innerHTML = "";
+  const names = getAssignees();
+  for (const name of names) {
+    list.appendChild(renderAssigneeRow(name));
+  }
+}
+
+function renderAssigneeRow(name, { isNew = false } = {}) {
+  const row = document.createElement("div");
+  row.className = "cat-row";
+  row.dataset.asgName = String(name || "");
+
+  row.innerHTML = `
+    <div class="cat-color" aria-hidden="true">
+      <div style="width:46px;height:38px;border-radius:12px;border:1px dashed rgba(11,16,32,.16);display:flex;align-items:center;justify-content:center;font-weight:900;color:rgba(11,16,32,.55);background:rgba(255,255,255,.7)">@</div>
+    </div>
+    <div class="cat-main">
+      <input class="cat-label" type="text" placeholder="Nombre (ej: Camila Rodríguez)" value="${escapeHtml(String(name || ""))}" aria-label="Nombre del responsable" />
+      <div class="cat-meta">
+        <span class="cat-id">tipo: <code>${isNew ? "(nuevo)" : "existente"}</code></span>
+      </div>
+    </div>
+    <div class="cat-actions">
+      <button type="button" class="btn danger asg-del" title="Eliminar">Eliminar</button>
+    </div>
+  `;
+
+  row.querySelector(".asg-del")?.addEventListener("click", async () => {
+    const label = row.querySelector(".cat-label")?.value?.trim() || name || "(sin nombre)";
+    const current = String(name || row.dataset.asgName || "").trim();
+    const ok = confirm(`¿Eliminar a "${label}"?\n\nLos eventos asignados a esta persona quedarán "Sin asignar".`);
+    if (!ok) return;
+
+    const affected = (UI_STATE.rawEvents || []).filter(e => String(e.assignedTo || "").trim() === current);
+    if (affected.length && typeof UI_STATE.onUpdate === "function") {
+      notify(`Quitando responsable en ${affected.length} evento(s)...`, { ms: 2600 });
+      for (const ev of affected) {
+        try { await UI_STATE.onUpdate(ev.id, { assignedTo: "" }); } catch (e) { console.error(e); }
+      }
+    }
+
+    row.remove();
+  });
+
+  return row;
+}
+
+function saveAssigneeManager() {
+  if (!$assigneeModal) return;
+  const list = $assigneeModal.querySelector("#asgList");
+  if (!list) return;
+
+  const rows = Array.from(list.querySelectorAll(".cat-row"));
+  const names = rows
+    .map(r => r.querySelector(".cat-label")?.value || "")
+    .map(s => String(s).trim())
+    .filter(Boolean);
+
+  const final = setAssignees(names);
+  populateAssignedSelect(UI_STATE.rawEvents);
+  populateAssignedToModal(UI_STATE.rawEvents, ($eventAssignedTo?.value || "").trim());
+  rerender();
+  renderAssigneeManagerList();
+  notify(`Responsables guardados ✅ (${final.length})`);
+  closeAssigneeManager();
 }

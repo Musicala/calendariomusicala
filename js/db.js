@@ -1,20 +1,16 @@
 /* =============================================================================
-  js/db.js — Firestore CRUD (events) — vPRO++++ (ASSIGNEE + RECURRENCE + FAST UPSERT)
+  js/db.js — Firestore CRUD (events) — vPRO∞ (ASSIGNEE + RECURRENCE PRO + FAST UPSERT)
   -----------------------------------------------------------------------------
   ✅ create/update/softDelete/restore
   ✅ get + subscribe por rango (month-friendly)
   ✅ upsertMany (import) con sourceHash anti-duplicados (optimizado con where-in)
   ✅ Rango usa SOLO orderBy(dateStart)
 
-  Mejoras vPRO++++:
-  - Campos nuevos:
-      - assignedTo (persona asignada)
-      - recurrence ("", "weekly", "monthly")  // simple y útil
-  - Update parcial real: merge con existing, valida lo mínimo
-  - Evita updates inútiles (comparación real)
-  - findManyBySourceHash: resuelve hashes en bloques (hasta 10 por query)
-  - upsertMany: menos lecturas, más velocidad, menos drama
-  - Normalización más robusta + aliases tolerantes desde UI
+  PRO Recurrence (nuevo):
+  - recurrence: null | { type:"interval", unit:"day|week|month|year", interval:number }
+  - Backward compatible con strings: "", "weekly", "monthly", "yearly"
+  - Tolerante: UI puede mandar JSON string en recurrence (ej: '{"unit":"week","interval":2}')
+
 ============================================================================= */
 
 import { db, serverTimestamp, Timestamp } from "./firebase.js";
@@ -43,7 +39,10 @@ const EVENTS_COL = collection(db, "events");
    Const / helpers
 ========================= */
 const ALLOWED_STATUS = new Set(["pending", "done", "cancelled"]);
-const ALLOWED_RECURRENCE = new Set(["", "weekly", "monthly"]); // simple a propósito
+
+// Recurrence PRO
+const RECURRENCE_UNITS = new Set(["day", "week", "month", "year"]);
+const RECURRENCE_MAX_INTERVAL = 100;
 
 /** Validación simple yyyy-mm-dd (y fecha real) */
 function isValidISODate(dateISO) {
@@ -61,14 +60,31 @@ function normalizeStatus(raw) {
   return st;
 }
 
-function normalizeRecurrence(raw) {
-  const r = normText(raw || "");
-  return ALLOWED_RECURRENCE.has(r) ? r : "";
+/** Stable-ish stringify (para comparar objetos sin drama) */
+function stableStringify(value) {
+  try {
+    if (value === null || value === undefined) return "";
+    if (typeof value !== "object") return String(value);
+
+    // Ordenar claves a un nivel (suficiente para este caso)
+    const keys = Object.keys(value).sort();
+    const obj = {};
+    for (const k of keys) obj[k] = value[k];
+    return JSON.stringify(obj);
+  } catch (_) {
+    return "";
+  }
 }
 
-/** Null-safe string compare */
-function sameStr(a, b) {
-  return String(a ?? "") === String(b ?? "");
+/** Null-safe compare (soporta objetos) */
+function sameValue(a, b) {
+  // igualdad rápida
+  if (a === b) return true;
+
+  // null/undefined/""
+  const sa = stableStringify(a);
+  const sb = stableStringify(b);
+  return sa === sb;
 }
 
 /** Pequeña ayuda: ignora undefined y deja null/"" explícitos */
@@ -78,6 +94,59 @@ function pickDefined(obj) {
     if (v !== undefined) out[k] = v;
   }
   return out;
+}
+
+/** Acepta objeto recurrence o string legacy o JSON string */
+function normalizeRecurrence(raw) {
+  // 1) vacío
+  if (raw === "" || raw === null || raw === undefined) return null;
+
+  // 2) si viene como string
+  if (typeof raw === "string") {
+    const s = normText(raw);
+
+    // legacy
+    if (s === "weekly")  return { type: "interval", unit: "week",  interval: 1 };
+    if (s === "monthly") return { type: "interval", unit: "month", interval: 1 };
+    if (s === "yearly")  return { type: "interval", unit: "year",  interval: 1 };
+
+    // puede venir como JSON string: {"unit":"week","interval":2}
+    if (s.startsWith("{") && s.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(raw);
+        return normalizeRecurrence(parsed);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    // si llega otra cosa rara: lo apagamos
+    return null;
+  }
+
+  // 3) objeto recurrence
+  if (typeof raw === "object") {
+    const unit = normText(raw.unit || raw.frequency || raw.everyUnit || "");
+    const intervalRaw = raw.interval ?? raw.every ?? raw.count ?? 1;
+    const interval = parseInt(intervalRaw, 10);
+
+    if (!RECURRENCE_UNITS.has(unit)) return null;
+    if (!Number.isFinite(interval) || interval < 1 || interval > RECURRENCE_MAX_INTERVAL) return null;
+
+    return { type: "interval", unit, interval };
+  }
+
+  return null;
+}
+
+/** Convierte recurrence object -> legacy string (solo para etiquetas / compat) */
+export function recurrenceToLegacyString(rec) {
+  const r = normalizeRecurrence(rec);
+  if (!r) return "";
+  if (r.unit === "week" && r.interval === 1) return "weekly";
+  if (r.unit === "month" && r.interval === 1) return "monthly";
+  if (r.unit === "year" && r.interval === 1) return "yearly";
+  return ""; // no hay legacy para intervalos avanzados
 }
 
 /* =========================
@@ -106,11 +175,12 @@ export function toDateISO(value) {
    - soporta aliases desde UI para no romper
 ========================= */
 function extractAssignedTo(input = {}, fallback = {}) {
-  // soporta nombres alternos para no romper si UI cambia un id/prop
   const val =
     input.assignedTo ??
     input.assignee ??
     input.assigned ??
+    input.eventAssignedTo ??
+    input.eventAssignee ??
     fallback.assignedTo ??
     fallback.assignee ??
     "";
@@ -122,17 +192,21 @@ function extractRecurrence(input = {}, fallback = {}) {
     input.recurrence ??
     input.repeat ??
     input.repetition ??
+    input.eventRecurrence ??
+    input.eventRepeat ??
     fallback.recurrence ??
+    fallback.repeat ??
+    fallback.repetition ??
     "";
-  return normalizeRecurrence(raw || "");
+  return normalizeRecurrence(raw);
 }
 
 function extractDateISO(input = {}, fallback = {}) {
-  // Soporta dateISO, date, dateStr...
   const raw =
     input.dateISO ??
     input.date ??
     input.dateStr ??
+    input.eventDate ??
     fallback.dateISO ??
     fallback.date ??
     "";
@@ -194,11 +268,16 @@ export async function createEvent(input, userEmail) {
     status,
     notes,
 
-    assignedTo,   // 👈 NUEVO
-    recurrence,   // 👈 NUEVO ("", "weekly", "monthly")
+    assignedTo,
+
+    // Recurrence PRO (objeto) o null
+    recurrence: recurrence || null,
+
+    // Opcional: guardamos también legacy string para debugging/compat (no obligatorio)
+    recurrenceLegacy: recurrenceToLegacyString(recurrence),
 
     dateStart: dateISOToTimestamp(dateISO),
-    dateISO, // redundante a propósito: facilita filtros/UI
+    dateISO,
 
     createdBy: email,
     createdAt: serverTimestamp(),
@@ -226,8 +305,8 @@ export async function updateEvent(eventId, input, userEmail) {
   if (!id) throw new Error("eventId requerido");
 
   const email = normText(userEmail || "");
-
   const ref = doc(db, "events", id);
+
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("El evento no existe o fue eliminado.");
 
@@ -241,7 +320,9 @@ export async function updateEvent(eventId, input, userEmail) {
     notes: incoming.notes,
 
     assignedTo: incoming.assignedTo,
-    recurrence: incoming.recurrence,
+
+    recurrence: incoming.recurrence || null,
+    recurrenceLegacy: recurrenceToLegacyString(incoming.recurrence),
 
     dateStart: dateISOToTimestamp(incoming.dateISO),
     dateISO: incoming.dateISO,
@@ -251,13 +332,13 @@ export async function updateEvent(eventId, input, userEmail) {
   });
 
   const changed =
-    !sameStr(existing.title, patch.title) ||
-    !sameStr(existing.category, patch.category) ||
-    !sameStr(existing.status, patch.status) ||
-    !sameStr(existing.notes, patch.notes) ||
-    !sameStr(existing.dateISO, patch.dateISO) ||
-    !sameStr(existing.assignedTo, patch.assignedTo) ||
-    !sameStr(existing.recurrence, patch.recurrence);
+    !sameValue(existing.title, patch.title) ||
+    !sameValue(existing.category, patch.category) ||
+    !sameValue(existing.status, patch.status) ||
+    !sameValue(existing.notes, patch.notes) ||
+    !sameValue(existing.dateISO, patch.dateISO) ||
+    !sameValue(existing.assignedTo, patch.assignedTo) ||
+    !sameValue(existing.recurrence, patch.recurrence);
 
   if (!changed) return { id, ...existing, _skipped: true };
 
@@ -437,6 +518,7 @@ export async function upsertMany(events = [], userEmail) {
     try {
       const sourceHash = normText(raw?.sourceHash || "");
 
+      // Sin hash: create directo
       if (!sourceHash) {
         const created = await createEvent(raw, email);
         results.created++;
@@ -444,7 +526,10 @@ export async function upsertMany(events = [], userEmail) {
         continue;
       }
 
+      // Con hash: intenta mapa primero
       let existing = existingByHash.get(sourceHash) || null;
+
+      // fallback por si no vino en el batch
       if (!existing) {
         existing = await findEventBySourceHash(sourceHash);
         if (existing) existingByHash.set(sourceHash, existing);
@@ -460,13 +545,13 @@ export async function upsertMany(events = [], userEmail) {
       const incoming = normalizeEventInputTolerant(raw, existing);
 
       const changed =
-        !sameStr(incoming.title, existing.title) ||
-        !sameStr(incoming.category, existing.category) ||
-        !sameStr(incoming.status, existing.status) ||
-        !sameStr(incoming.notes, existing.notes) ||
-        !sameStr(incoming.dateISO, existing.dateISO) ||
-        !sameStr(incoming.assignedTo, existing.assignedTo) ||
-        !sameStr(incoming.recurrence, existing.recurrence);
+        !sameValue(incoming.title, existing.title) ||
+        !sameValue(incoming.category, existing.category) ||
+        !sameValue(incoming.status, existing.status) ||
+        !sameValue(incoming.notes, existing.notes) ||
+        !sameValue(incoming.dateISO, existing.dateISO) ||
+        !sameValue(incoming.assignedTo, existing.assignedTo) ||
+        !sameValue(incoming.recurrence, existing.recurrence);
 
       if (!changed) {
         results.skipped++;
@@ -489,12 +574,21 @@ export async function upsertMany(events = [], userEmail) {
 
 /* =========================
    Mapper doc -> objeto usable en UI
+   - Convierte recurrence legacy/string -> objeto
 ========================= */
 function mapEventDoc(docSnap) {
   const data = docSnap.data() || {};
 
   const dateStart = data.dateStart || null;
   const dateISO = data.dateISO || toDateISO(dateStart);
+
+  // Recurrence: soporta objeto o legacy string
+  const rec =
+    (data.recurrence !== undefined ? data.recurrence : null) ??
+    (data.recurrenceLegacy !== undefined ? data.recurrenceLegacy : null) ??
+    "";
+
+  const recurrence = normalizeRecurrence(rec);
 
   return {
     id: docSnap.id,
@@ -505,7 +599,12 @@ function mapEventDoc(docSnap) {
     notes: data.notes || "",
 
     assignedTo: data.assignedTo || "",
-    recurrence: data.recurrence || "",
+
+    // recurrence PRO (obj) o null
+    recurrence,
+
+    // (opcional) por si UI vieja lo usa
+    recurrenceLegacy: data.recurrenceLegacy || recurrenceToLegacyString(recurrence),
 
     dateStart,
     dateISO,
