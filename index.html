@@ -3,12 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 
   <title>Calendario · Musicala</title>
   <meta name="description" content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios." />
   <meta name="color-scheme" content="light" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta name="format-detection" content="telephone=no" />
+
+  <!-- Social (Open Graph / Twitter) -->
+  <meta property="og:title" content="Calendario · Musicala" />
+  <meta property="og:description" content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios." />
+  <meta property="og:type" content="website" />
+  <!-- Si tienes un preview: -->
+  <!-- <meta property="og:image" content="./og-calendar.png" /> -->
+  <meta name="twitter:card" content="summary_large_image" />
 
   <!-- (Opcional) PWA: si ya tienes manifest y icons, queda listo -->
   <!-- <link rel="manifest" href="manifest.webmanifest" /> -->
@@ -26,6 +36,9 @@
     rel="stylesheet"
   />
 
+  <!-- Preload logo (mejor percepción al cargar) -->
+  <link rel="preload" as="image" href="./logo.png" />
+
   <!-- Estilos -->
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -33,6 +46,9 @@
 <body>
   <!-- Accesibilidad: se ve SOLO con teclado (CSS controla) -->
   <a class="skip-link" href="#app">Saltar al contenido</a>
+
+  <!-- Live region global para mensajes importantes (sin toasts) -->
+  <div class="sr-only" role="status" aria-live="polite" aria-atomic="true" id="srStatus"></div>
 
   <noscript>
     <div style="max-width:900px;margin:16px auto;padding:14px;border:1px solid rgba(15,23,42,.14);border-radius:14px;background:#fff;">
@@ -55,6 +71,8 @@
           class="brand-logo"
           loading="eager"
           decoding="async"
+          width="44"
+          height="44"
         />
         <div class="brand-text">
           <span class="brand-title">Calendario</span>
@@ -66,11 +84,21 @@
     </div>
 
     <div class="header-right" aria-label="Sesión">
-      <button id="btnLogin" class="btn primary" type="button" aria-label="Iniciar sesión">
+      <button
+        id="btnLogin"
+        class="btn primary"
+        type="button"
+        aria-label="Iniciar sesión"
+      >
         Iniciar sesión
       </button>
 
-      <button id="btnLogout" class="btn ghost hidden" type="button" aria-label="Cerrar sesión">
+      <button
+        id="btnLogout"
+        class="btn ghost hidden"
+        type="button"
+        aria-label="Cerrar sesión"
+      >
         Salir
       </button>
     </div>
@@ -79,7 +107,13 @@
   <!-- ======================
        BLOQUE NO AUTORIZADO
   ======================= -->
-  <section id="unauthorized" class="unauthorized hidden" role="status" aria-live="polite" aria-atomic="true">
+  <section
+    id="unauthorized"
+    class="unauthorized hidden"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  >
     <p>
       Este calendario es de uso interno.<br />
       Si crees que deberías tener acceso, revisa el correo con el que iniciaste sesión.
@@ -94,22 +128,48 @@
     <!-- Toolbar -->
     <section class="toolbar" aria-label="Navegación de mes">
       <div class="toolbar-left" role="group" aria-label="Cambiar mes">
-        <button id="btnPrevMonth" class="btn ghost" type="button" aria-label="Mes anterior" title="Mes anterior">
+        <button
+          id="btnPrevMonth"
+          class="btn ghost"
+          type="button"
+          aria-label="Mes anterior"
+          title="Mes anterior"
+        >
           ◀
         </button>
 
         <h2 id="currentMonth" aria-live="polite" aria-atomic="true">Mes Año</h2>
 
-        <button id="btnNextMonth" class="btn ghost" type="button" aria-label="Mes siguiente" title="Mes siguiente">
+        <button
+          id="btnNextMonth"
+          class="btn ghost"
+          type="button"
+          aria-label="Mes siguiente"
+          title="Mes siguiente"
+        >
           ▶
         </button>
       </div>
 
       <div class="toolbar-right" role="group" aria-label="Acciones">
-        <button id="btnToday" class="btn ghost" type="button" title="Ir a hoy" aria-label="Ir a hoy">
+        <button
+          id="btnToday"
+          class="btn ghost"
+          type="button"
+          title="Ir a hoy"
+          aria-label="Ir a hoy"
+        >
           Hoy
         </button>
-        <button id="btnNewEvent" class="btn primary" type="button" title="Crear nuevo evento" aria-label="Crear nuevo evento" aria-haspopup="dialog">
+
+        <button
+          id="btnNewEvent"
+          class="btn primary"
+          type="button"
+          title="Crear nuevo evento"
+          aria-label="Crear nuevo evento"
+          aria-haspopup="dialog"
+        >
           ＋ Nuevo evento
         </button>
       </div>
@@ -121,14 +181,14 @@
     <section class="overview" aria-label="Resumen">
       <div class="overview-card" id="overviewToday">
         <div class="overview-title">Hoy</div>
-        <div class="overview-body" id="todayList" aria-live="polite">
+        <div class="overview-body" id="todayList" aria-live="polite" aria-atomic="true">
           <span class="muted">Sin eventos</span>
         </div>
       </div>
 
       <div class="overview-card" id="overviewNext">
         <div class="overview-title">Próximos 7 días</div>
-        <div class="overview-body" id="nextList" aria-live="polite">
+        <div class="overview-body" id="nextList" aria-live="polite" aria-atomic="true">
           <span class="muted">Sin eventos</span>
         </div>
       </div>
@@ -148,6 +208,7 @@
           spellcheck="false"
           inputmode="search"
           aria-label="Buscar eventos"
+          aria-keyshortcuts="Control+K Meta+K"
         />
       </div>
 
@@ -213,7 +274,14 @@
          Vista Mes (Calendario)
     ======================= -->
     <section class="calendar" id="monthView" aria-label="Calendario mensual">
-      <div class="calendar-grid" id="calendarGrid" role="grid" aria-label="Cuadrícula del calendario">
+      <!-- Nota: ui.js renderiza dentro de #calendarGrid -->
+      <div
+        class="calendar-grid"
+        id="calendarGrid"
+        role="grid"
+        aria-label="Cuadrícula del calendario"
+        aria-readonly="true"
+      >
         <!-- render por JS -->
       </div>
     </section>
@@ -227,7 +295,7 @@
         <div class="list-meta" id="listMeta" aria-live="polite" aria-atomic="true"></div>
       </div>
 
-      <div class="list-body" id="listBody">
+      <div class="list-body" id="listBody" aria-live="polite" aria-atomic="false">
         <!-- render por JS -->
       </div>
     </section>
@@ -238,7 +306,6 @@
        MODAL EVENTO
        ✅ IDs alineados con ui.js:
           eventAssignedTo + eventRecurrence
-       ✅ Limpio: sin “Eventos del día” (ya lo muestran en overview)
   ======================= -->
   <div
     id="eventModal"
@@ -250,8 +317,24 @@
   >
     <div class="modal-content" role="document">
       <div class="modal-head">
-        <h3 id="modalTitle">Nuevo evento</h3>
-        <p id="modalDesc" class="muted">Crea o edita una tarea del calendario.</p>
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+          <div>
+            <h3 id="modalTitle">Nuevo evento</h3>
+            <p id="modalDesc" class="muted">Crea o edita una tarea del calendario.</p>
+          </div>
+
+          <!-- Botón cerrar (además de Escape/overlay) -->
+          <button
+            type="button"
+            class="btn ghost"
+            aria-label="Cerrar"
+            title="Cerrar (Esc)"
+            id="btnCloseModalX"
+            onclick="document.getElementById('btnCancelModal')?.click()"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       <form id="eventForm" novalidate>
@@ -301,7 +384,6 @@
         <div class="form-2col">
           <label>
             Repetición
-            <!-- ui.js repuebla esto, así que el HTML solo necesita el select -->
             <select id="eventRecurrence" aria-label="Repetición"></select>
           </label>
 

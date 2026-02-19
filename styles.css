@@ -289,6 +289,13 @@ a{ color:inherit; }
 }
 .btn.ghost:hover{ background: rgba(255,255,255,.92); }
 
+.btn.tiny{
+  min-height: 36px;
+  padding: 8px 10px;
+  font-size: 12px;
+  border-radius: 10px;
+}
+
 .btn.danger{
   background: rgba(239,68,68,.10);
   border-color: rgba(239,68,68,.25);
@@ -1052,6 +1059,116 @@ select{
   font-weight: 800;
 }
 
+/* =========================
+   Agenda del día (dentro del modal)
+========================= */
+.day-agenda-bar{
+  margin-top: 10px;
+  display:flex;
+  justify-content: flex-end;
+}
+
+.day-agenda{
+  margin: 8px 6px 6px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255,255,255,.86);
+  box-shadow: 0 10px 26px rgba(11,16,32,.06);
+  padding: 10px;
+}
+
+.day-agenda-head{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.day-agenda-title{
+  font-weight: 950;
+  color: var(--ink);
+}
+
+.day-agenda-actions{
+  display:flex;
+  gap: 8px;
+}
+
+.day-agenda-meta{
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.day-agenda-list{
+  margin-top: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 38vh;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.agenda-item{
+  width: 100%;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(15,23,42,.10);
+  background: rgba(248,250,252,.9);
+  text-align:left;
+}
+
+.agenda-item:hover{
+  border-color: rgba(15,23,42,.18);
+  background: rgba(255,255,255,.95);
+}
+
+.agenda-main{ min-width: 0; }
+.agenda-title{
+  font-weight: 950;
+  color: var(--ink);
+  line-height: 1.15;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 520px;
+}
+
+.agenda-sub{
+  margin-top: 6px;
+  display:flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agenda-pill{
+  font-size: 11px;
+  font-weight: 900;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(15,23,42,.10);
+  background: rgba(255,255,255,.85);
+  color: rgba(11,16,32,.78);
+}
+
+.agenda-pill.rec{
+  border-color: rgba(104,13,191,.18);
+  background: rgba(104,13,191,.06);
+  color: rgba(104,13,191,.92);
+}
+
+.agenda-arrow{
+  font-weight: 950;
+  color: rgba(11,16,32,.55);
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
+}
+
 /* ✅ Si algún ui.js viejo inyecta day-peek, lo ocultamos para no duplicar */
 .day-peek{ display:none !important; }
 
@@ -1209,4 +1326,85 @@ select{
 ========================= */
 @media (prefers-reduced-motion: reduce){
   *{ transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* =========================
+   Categorías editables (modal)
+========================= */
+.cat-edit-btn{
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(11,16,32,.14);
+  background: rgba(255,255,255,.7);
+  color: rgba(11,16,32,.85);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.cat-edit-btn:hover{ filter: brightness(.98); }
+
+.cat-modal.hidden{ display:none; }
+.cat-modal{ position:fixed; inset:0; z-index: 80; }
+.cat-modal-overlay{ position:absolute; inset:0; background: rgba(11,16,32,.35); backdrop-filter: blur(6px); }
+.cat-modal-card{
+  position: relative;
+  width: min(860px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  overflow: auto;
+  margin: 14px auto;
+  background: rgba(255,255,255,.92);
+  border: 1px solid rgba(11,16,32,.12);
+  border-radius: 22px;
+  box-shadow: 0 18px 54px rgba(11,16,32,.18);
+  padding: 18px;
+}
+
+.cat-modal-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.cat-modal-head h3{ margin:0; font-size: 18px; }
+.cat-modal-actions{ display:flex; gap:10px; }
+
+.cat-modal-hint{ margin:10px 0 14px; color: rgba(11,16,32,.68); font-size: 13px; }
+
+.cat-list{ display:flex; flex-direction:column; gap:10px; }
+.cat-row{
+  display:grid;
+  grid-template-columns: 56px 1fr 120px;
+  gap:12px;
+  align-items:center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: rgba(255,255,255,.75);
+}
+.cat-color input[type="color"]{
+  width: 46px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid rgba(11,16,32,.12);
+  padding: 0;
+  background: transparent;
+}
+.cat-main{ display:flex; flex-direction:column; gap:6px; }
+.cat-label{
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(11,16,32,.12);
+  background: rgba(255,255,255,.9);
+  font-weight: 700;
+}
+.cat-meta{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12px; color: rgba(11,16,32,.60); }
+.cat-id code{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+.cat-lock{ font-weight: 700; }
+
+.cat-actions{ display:flex; justify-content:flex-end; }
+
+.cat-modal-foot{ display:flex; justify-content:space-between; gap:12px; margin-top: 14px; }
+
+@media (max-width: 560px){
+  .cat-row{ grid-template-columns: 56px 1fr; grid-template-rows:auto auto; }
+  .cat-actions{ grid-column: 2; justify-content:flex-start; }
+  .cat-modal-foot{ flex-direction:column; }
 }
