@@ -16,38 +16,36 @@
   <meta property="og:title" content="Calendario · Musicala" />
   <meta property="og:description" content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios." />
   <meta property="og:type" content="website" />
-  <!-- Si tienes un preview: -->
   <!-- <meta property="og:image" content="./og-calendar.png" /> -->
   <meta name="twitter:card" content="summary_large_image" />
 
-  <!-- (Opcional) PWA: si ya tienes manifest y icons, queda listo -->
-  <!-- <link rel="manifest" href="manifest.webmanifest" /> -->
-  <!-- <link rel="icon" href="icons/icon-192.png" sizes="192x192" /> -->
-  <!-- <link rel="apple-touch-icon" href="icons/icon-192.png" /> -->
+  <!-- Favicons (NO PWA; solo estándar) -->
+  <link rel="icon" href="./favicon.ico" />
+  <!-- Opcionales si luego tienen pngs -->
+  <!-- <link rel="icon" type="image/png" sizes="32x32" href="./icons/icon-32.png" /> -->
+  <!-- <link rel="icon" type="image/png" sizes="16x16" href="./icons/icon-16.png" /> -->
 
-  <!-- Fuente (preconnect + preload para menos FOUT) -->
+  <!-- Fuente (preconnect + load no bloqueante) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="preload"
-        as="style"
-        href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;600;800;900&display=swap" />
-  <link
-    href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;600;800;900&display=swap"
-    rel="stylesheet"
-  />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" />
 
   <!-- Preload logo (mejor percepción al cargar) -->
   <link rel="preload" as="image" href="./logo.png" />
 
   <!-- Estilos -->
   <link rel="stylesheet" href="styles.css" />
+
+  <!-- Pequeño hardening -->
+  <meta name="robots" content="noindex, nofollow" />
 </head>
 
 <body>
   <!-- Accesibilidad: se ve SOLO con teclado (CSS controla) -->
   <a class="skip-link" href="#app">Saltar al contenido</a>
 
-  <!-- Live region global para mensajes importantes (sin toasts) -->
+  <!-- Live region global para mensajes importantes -->
   <div class="sr-only" role="status" aria-live="polite" aria-atomic="true" id="srStatus"></div>
 
   <noscript>
@@ -169,6 +167,7 @@
           title="Crear nuevo evento"
           aria-label="Crear nuevo evento"
           aria-haspopup="dialog"
+          aria-controls="eventModal"
         >
           ＋ Nuevo evento
         </button>
@@ -274,7 +273,6 @@
          Vista Mes (Calendario)
     ======================= -->
     <section class="calendar" id="monthView" aria-label="Calendario mensual">
-      <!-- Nota: ui.js renderiza dentro de #calendarGrid -->
       <div
         class="calendar-grid"
         id="calendarGrid"
@@ -323,14 +321,14 @@
             <p id="modalDesc" class="muted">Crea o edita una tarea del calendario.</p>
           </div>
 
-          <!-- Botón cerrar (además de Escape/overlay) -->
+          <!-- Botón cerrar -->
           <button
             type="button"
             class="btn ghost"
             aria-label="Cerrar"
             title="Cerrar (Esc)"
             id="btnCloseModalX"
-            onclick="document.getElementById('btnCancelModal')?.click()"
+            data-modal-close="true"
           >
             ✕
           </button>
@@ -338,6 +336,9 @@
       </div>
 
       <form id="eventForm" novalidate>
+        <!-- Guard para enter key -->
+        <button type="submit" class="sr-only" aria-hidden="true" tabindex="-1">submit</button>
+
         <label>
           Título
           <input
@@ -406,7 +407,7 @@
           </button>
 
           <div class="modal-actions-right">
-            <button type="button" id="btnCancelModal" class="btn ghost" aria-label="Cancelar">
+            <button type="button" id="btnCancelModal" class="btn ghost" aria-label="Cancelar" data-modal-close="true">
               Cancelar
             </button>
             <button type="submit" class="btn primary" id="btnSaveEvent" aria-label="Guardar evento">
@@ -419,7 +420,7 @@
   </div>
 
   <!-- Overlay -->
-  <div id="modalOverlay" class="overlay hidden" aria-hidden="true"></div>
+  <div id="modalOverlay" class="overlay hidden" aria-hidden="true" data-modal-close="true"></div>
 
   <!-- Toast host -->
   <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
@@ -436,5 +437,54 @@
   <script type="module" src="js/db.js"></script>
   <script type="module" src="js/ui.js"></script>
   <script type="module" src="js/app.js"></script>
+
+  <!-- Mini-hardening UX (sin tocar tu ui.js): close modal con overlay/X y Ctrl+K focus search -->
+  <script>
+    (function () {
+      const $ = (q) => document.querySelector(q);
+      const overlay = $('#modalOverlay');
+      const modal = $('#eventModal');
+      const btnCancel = $('#btnCancelModal');
+      const btnCloseX = $('#btnCloseModalX');
+      const search = $('#searchEvents');
+
+      function tryCloseModal() {
+        if (!modal || modal.classList.contains('hidden')) return;
+        // Preferimos disparar la misma ruta del sistema (para que ui.js limpie estado)
+        if (btnCancel) btnCancel.click();
+      }
+
+      // Delegado: elementos con data-modal-close cierran
+      document.addEventListener('click', (e) => {
+        const t = e.target;
+        if (t && t.closest && t.closest('[data-modal-close="true"]')) {
+          e.preventDefault();
+          tryCloseModal();
+        }
+      });
+
+      // Escape cierra modal (si ui.js no lo hace)
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') tryCloseModal();
+
+        // Ctrl+K / Cmd+K enfoca búsqueda (sin romper shortcuts del sistema)
+        const isK = (e.key || '').toLowerCase() === 'k';
+        const metaOrCtrl = e.metaKey || e.ctrlKey;
+        if (metaOrCtrl && isK) {
+          e.preventDefault();
+          if (search) {
+            search.focus();
+            search.select?.();
+          }
+        }
+      });
+
+      // Click en overlay cierra modal (fallback)
+      if (overlay) overlay.addEventListener('click', tryCloseModal);
+
+      // Si por alguna razón ui.js no engancha el X
+      if (btnCloseX) btnCloseX.addEventListener('click', tryCloseModal);
+    })();
+  </script>
 </body>
 </html>

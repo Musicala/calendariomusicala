@@ -12,6 +12,13 @@
   ✅ Quick toggle en chips + overview (si ui.js lo pinta)
   ✅ Toast (si existe #toastHost)
   ✅ Retro-compat IDs antiguos (eventAssignee/eventRepeat*) + IDs nuevos (eventAssignedTo/eventRecurrence)
+
+  Fixes + upgrades:
+  ✅ Define --primary (antes se usaba pero no existía)
+  ✅ Border-right correcto en calendario (cuando hay 7 headers arriba)
+  ✅ Mejoras mobile: topbar más apretada, botones más clicables, menos “saltos”
+  ✅ Inputs/selects más consistentes + autofill control
+  ✅ Accesibilidad: focus visible más claro, contrastes y tap targets
 ============================================================================= */
 
 /* =========================
@@ -29,6 +36,10 @@
   --wagner:#0C0A1E;
   --haydn:#E6E8E8;
   --debussy:#F9F9F9;
+
+  /* Aliases útiles */
+  --primary: var(--mozart);
+  --accent: var(--brahms);
 
   /* UI light */
   --bg: var(--debussy);
@@ -59,8 +70,8 @@
   --focus:0 0 0 4px rgba(12,65,196,.18);
   --focus-strong:0 0 0 4px rgba(12,65,196,.24), 0 12px 30px rgba(12,65,196,.14);
 
-  --header-bg: rgba(255,255,255,.86);
-  --header-blur: 10px;
+  --header-bg: rgba(255,255,255,.88);
+  --header-blur: 12px;
 
   --tap: 44px;
 
@@ -90,6 +101,11 @@
 *{ box-sizing:border-box; }
 html,body{ height:100%; }
 
+html{
+  color-scheme: light;
+  -webkit-text-size-adjust: 100%;
+}
+
 body{
   margin:0;
   font-family: Inter, Roboto, system-ui, -apple-system, Segoe UI, Ubuntu, Arial, sans-serif;
@@ -100,11 +116,16 @@ body{
   padding-bottom: var(--safe-b);
 }
 
-a{ color:inherit; }
+a{ color:inherit; text-decoration: none; }
+a:hover{ text-decoration: underline; text-decoration-color: rgba(12,65,196,.35); }
+
 ::selection{ background:rgba(12,65,196,.18); }
 
 :focus{ outline:none; }
-:focus-visible{ box-shadow: var(--focus); border-color: rgba(12,65,196,.35) !important; }
+:focus-visible{
+  box-shadow: var(--focus);
+  border-color: rgba(12,65,196,.35) !important;
+}
 
 /* Scrollbars suaves */
 *{
@@ -200,6 +221,8 @@ a{ color:inherit; }
   align-items:center;
   gap:10px;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .brand{
@@ -269,6 +292,7 @@ a{ color:inherit; }
   transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease, filter .15s ease;
   box-shadow: 0 1px 0 rgba(15,23,42,.05);
   user-select:none;
+  -webkit-tap-highlight-color: transparent;
 }
 .btn:hover{
   border-color: rgba(15,23,42,.22);
@@ -357,6 +381,8 @@ a{ color:inherit; }
   align-items:center;
   gap:10px;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 #currentMonth{
@@ -506,6 +532,8 @@ a{ color:inherit; }
   display:flex;
   align-items:center;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* Buscador PRO */
@@ -529,6 +557,7 @@ a{ color:inherit; }
     0 1px 0 rgba(15,23,42,.04),
     0 10px 28px rgba(15,23,42,.06);
   transition: box-shadow .18s ease, border-color .18s ease, transform .08s ease, background .18s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #searchEvents::placeholder{
@@ -571,6 +600,7 @@ a{ color:inherit; }
 
   box-shadow: 0 1px 0 rgba(15,23,42,.04);
   transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease, color .15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .seg:hover{
@@ -619,7 +649,12 @@ a{ color:inherit; }
   color: var(--muted);
 }
 
-select, input[type="date"], input[type="text"], textarea, input[type="number"]{
+/* Inputs base */
+select,
+input[type="date"],
+input[type="text"],
+textarea,
+input[type="number"]{
   width: 100%;
   min-height: var(--tap);
   padding: 10px 12px;
@@ -632,14 +667,24 @@ select, input[type="date"], input[type="text"], textarea, input[type="number"]{
   font-weight:900;
   outline:none;
   transition: box-shadow .15s ease, border-color .15s ease, background .15s ease, transform .08s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-select:focus, input[type="date"]:focus, input[type="text"]:focus, textarea:focus, input[type="number"]:focus{
+select:focus,
+input[type="date"]:focus,
+input[type="text"]:focus,
+textarea:focus,
+input[type="number"]:focus{
   box-shadow: var(--focus-strong);
   border-color: rgba(12,65,196,.35);
   background:#fff;
 }
-select:active, input[type="date"]:active, input[type="text"]:active, textarea:active, input[type="number"]:active{
+
+select:active,
+input[type="date"]:active,
+input[type="text"]:active,
+textarea:active,
+input[type="number"]:active{
   transform: translateY(1px);
 }
 
@@ -654,6 +699,14 @@ select{
   background-repeat: no-repeat, no-repeat;
   background-position: 0 0, right 12px center;
   background-size: auto, 18px 18px;
+}
+
+/* Autofill (Chrome) para que no ponga fondo amarillo feo */
+input:-webkit-autofill,
+textarea:-webkit-autofill,
+select:-webkit-autofill{
+  -webkit-box-shadow: 0 0 0 30px var(--panel2) inset !important;
+  -webkit-text-fill-color: var(--ink) !important;
 }
 
 /* =========================
@@ -683,7 +736,9 @@ select{
   background: rgba(15,23,42,.03);
   border-bottom:1px solid var(--line);
   text-transform: capitalize;
+  border-right: 1px solid var(--line);
 }
+.calendar-grid > .cal-head:nth-child(7n){ border-right: none; }
 
 /* Celda día */
 .day{
@@ -698,9 +753,12 @@ select{
   position: relative;
 
   transition: background .15s ease, box-shadow .15s ease, transform .08s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.day:nth-child(7n){ border-right: none; }
+/* ✅ FIX: como hay 7 headers arriba, el último col de “.day”
+   NO es nth-child(7n). Es nth-child(7n + 14). */
+.calendar-grid > .day:nth-child(7n + 14){ border-right: none; }
 
 .day.muted{
   background: rgba(15,23,42,.02);
@@ -783,6 +841,7 @@ select{
 
   line-height: 1.15;
   transition: transform .08s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 .chip:hover{
   background: rgba(12,65,196,.06);
@@ -811,10 +870,12 @@ select{
 .chip.is-done{
   background: rgba(22,163,74,.06);
   border-color: rgba(22,163,74,.20);
+  border-left-color: rgba(22,163,74,.85);
 }
 .chip.is-cancelled{
   background: rgba(239,68,68,.06);
   border-color: rgba(239,68,68,.20);
+  border-left-color: rgba(239,68,68,.85);
   opacity: .92;
 }
 
@@ -848,6 +909,7 @@ select{
   margin-left: 6px;
   box-shadow: 0 1px 0 rgba(15,23,42,.04);
   transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .chip-check:hover{
@@ -942,6 +1004,7 @@ select{
   cursor:pointer;
 
   transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 .list-item:hover{
   border-color: rgba(15,23,42,.18);
@@ -1092,6 +1155,7 @@ select{
 .day-agenda-actions{
   display:flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .day-agenda-meta{
@@ -1195,6 +1259,69 @@ select{
   gap: 12px;
 }
 
+/* =========================
+   Repetición (UI avanzada)
+========================= */
+.rec-adv{
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: -2px;
+}
+
+.rec-adv-head{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rec-adv-toggle{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  font-weight: 900;
+  color: var(--ink);
+  user-select: none;
+}
+
+.rec-adv-toggle input{
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.rec-adv-controls{
+  display:grid;
+  grid-template-columns: auto 96px 1fr auto;
+  gap: 8px;
+  align-items:center;
+  padding: 10px 10px;
+  border: 1px solid rgba(15,23,42,.10);
+  border-radius: 14px;
+  background: rgba(255,255,255,.65);
+}
+
+.rec-adv-controls input[type="number"],
+.rec-adv-controls select{
+  width: 100%;
+}
+
+.rec-adv-hint{
+  grid-column: 1 / -1;
+  font-size: 12px;
+}
+
+@media (max-width: 560px){
+  .rec-adv-controls{ grid-template-columns: auto 1fr; }
+  .rec-adv-controls .btn{
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .rec-adv-hint{ grid-column: 1 / -1; }
+}
+
 /* Inputs del modal (IDs nuevos + compat con viejos) */
 #eventTitle,
 #eventCategory,
@@ -1218,12 +1345,14 @@ select{
   justify-content:space-between;
   gap:10px;
   padding: 0 6px 6px;
+  flex-wrap: wrap;
 }
 
 .modal-actions-right{
   display:flex;
   gap:10px;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* =========================
@@ -1298,6 +1427,11 @@ select{
 }
 
 @media (max-width: 620px){
+  .header{
+    gap:10px;
+    padding: calc(10px + var(--safe-t)) calc(12px + var(--safe-r)) 10px calc(12px + var(--safe-l));
+  }
+
   .app{
     width: calc(100vw - 20px);
     padding: 14px 0 18px;
@@ -1342,6 +1476,7 @@ select{
   font-size: 12px;
   cursor: pointer;
   align-self: flex-start;
+  -webkit-tap-highlight-color: transparent;
 }
 .cat-edit-btn:hover{ filter: brightness(.98); }
 
@@ -1361,9 +1496,9 @@ select{
   padding: 18px;
 }
 
-.cat-modal-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.cat-modal-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap: wrap; }
 .cat-modal-head h3{ margin:0; font-size: 18px; }
-.cat-modal-actions{ display:flex; gap:10px; }
+.cat-modal-actions{ display:flex; gap:10px; flex-wrap: wrap; }
 
 .cat-modal-hint{ margin:10px 0 14px; color: rgba(11,16,32,.68); font-size: 13px; }
 
@@ -1401,7 +1536,7 @@ select{
 
 .cat-actions{ display:flex; justify-content:flex-end; }
 
-.cat-modal-foot{ display:flex; justify-content:space-between; gap:12px; margin-top: 14px; }
+.cat-modal-foot{ display:flex; justify-content:space-between; gap:12px; margin-top: 14px; flex-wrap: wrap; }
 
 @media (max-width: 560px){
   .cat-row{ grid-template-columns: 56px 1fr; grid-template-rows:auto auto; }
