@@ -10,6 +10,11 @@ import { initUI, setEvents, setMonth, getCurrentView } from "./ui.js";
 import { createEvent, updateEvent, softDeleteEvent, subscribeEventsInRange } from "./db.js";
 import { startOfMonth, endOfMonth } from "./utils.js";
 
+// Para que las repeticiones (mensual/anual) aparezcan en meses futuros,
+// necesitamos cargar también los "eventos semilla" que fueron creados en meses anteriores.
+// Si solo consultamos el mes visible, el evento base no viene y no hay de dónde expandir.
+const LOOKBACK_YEARS = 5;
+
 /* =========================
    Estado global app
 ========================= */
@@ -27,12 +32,12 @@ function safeUnsub() {
 }
 
 function monthRange(year, monthIndex) {
-  return {
-    from: startOfMonth(year, monthIndex),
-    to: endOfMonth(year, monthIndex)
-  };
+  // Nota: a propósito traemos varios años hacia atrás para incluir eventos recurrentes “semilla”.
+  // UI se encarga de mostrar solo lo del rango visible (no te va a llenar el calendario de 2021).
+  const from = startOfMonth(year - LOOKBACK_YEARS, 0); // 1 de enero del año - LOOKBACK
+  const to   = endOfMonth(year, monthIndex);           // fin del mes visible
+  return { from, to };
 }
-
 function requireEmail() {
   if (!USER_EMAIL) throw new Error("No hay sesión activa.");
 }

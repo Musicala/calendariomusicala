@@ -1,5 +1,5 @@
 /* =============================================================================
-  js/ui.js — UI del calendario (render + modal + filtros) — vPRO∞ (RECURRENCE PRO)
+  js/ui.js — UI del calendario (render + modal + filtros) — vPRO∞ (RECURRENCE PRO+)
   -----------------------------------------------------------------------------
   - Render grilla mensual (6x7)
   - Chips de eventos por día (compact + @asignado)
@@ -12,7 +12,7 @@
   - ✅ Recurrentes PRO:
       recurrence: null | { type:"interval", unit:"day|week|month|year", interval:number }
     Backward compatible: "" | "weekly" | "monthly" | "yearly"
-  - ✅ Modal limpio + enhancements
+  - ✅ Recurrence UI PRO+ (limpia, con resumen, toggle y “cada X” ordenado)
 ============================================================================= */
 
 import {
@@ -221,7 +221,6 @@ function recurrenceLabel(rec) {
 
   const { unit, interval } = r;
 
-  // Nombres bonitos
   const unitLabel = (u, n) => {
     if (u === "day")   return n === 1 ? "día" : "días";
     if (u === "week")  return n === 1 ? "semana" : "semanas";
@@ -257,8 +256,10 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
   ensureAssigneeManagerUI();
 
   populateStatusSelects();
-  populateRecurrenceSelect();        // 👈 ahora PRO
-  ensureRecurrenceAdvancedUI();      // 👈 UI progresiva “cada X”
+
+  // Recurrence UI PRO+ (select + sección avanzada)
+  populateRecurrenceSelect();
+  ensureRecurrenceSectionUI();
 
   // Inicial: no depende de eventos. Mete ASSIGNEES sí o sí.
   populateAssignedSelect([]);
@@ -469,8 +470,11 @@ export function setEvents(events = []) {
   // repoblar responsables con base en raw + ASSIGNEES fijo
   populateAssignedSelect(UI_STATE.rawEvents);
   populateAssignedToModal(UI_STATE.rawEvents);
+
+  // recurrence UI (por si el modal se reusa)
   populateRecurrenceSelect();
-  ensureRecurrenceAdvancedUI();
+  ensureRecurrenceSectionUI();
+  setRecurrenceControlsValue(null);
 
   UI_STATE.events = expandRecurringForVisibleRange(UI_STATE.rawEvents, UI_STATE.year, UI_STATE.monthIndex);
 
@@ -603,7 +607,7 @@ function renderList(year, monthIndex, events = []) {
   if ($listTitle) $listTitle.textContent = "Eventos";
   if ($listMeta) {
     const txt = `${filtered.length} ${filtered.length === 1 ? "evento" : "eventos"}`;
-    $listMeta.textContent = UI_STATE.searchQuery ? `${txt} · filtro: “${UI_STATE.searchQuery}”` : txt;
+    $listMeta.textContent = UI_STATE.searchQuery ? `${txt} · filtro: “${filtered.length ? UI_STATE.searchQuery : UI_STATE.searchQuery}”` : txt;
   }
 
   $listBody.innerHTML = "";
@@ -845,7 +849,7 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
 
   populateAssignedToModal(UI_STATE.rawEvents);
   populateRecurrenceSelect();
-  ensureRecurrenceAdvancedUI();
+  ensureRecurrenceSectionUI();
 
   if ($eventTitle) $eventTitle.value = prefillFromEvent?.title ? String(prefillFromEvent.title) : "";
   if ($eventCategory) $eventCategory.value = prefillFromEvent?.category ? String(prefillFromEvent.category) : baseCat;
@@ -872,7 +876,7 @@ function openModalForEdit(ev) {
 
   populateAssignedToModal(UI_STATE.rawEvents, ev.assignedTo || "");
   populateRecurrenceSelect();
-  ensureRecurrenceAdvancedUI();
+  ensureRecurrenceSectionUI();
 
   if ($eventTitle) $eventTitle.value = ev.title || "";
   if ($eventCategory) $eventCategory.value = ev.category || (UI_STATE.categories?.[0]?.id || "otro");
@@ -944,113 +948,172 @@ function closeModal() {
   UI_STATE.editingId = null;
 }
 
-/* =========================
-   Recurrence UI (PROGRESIVA)
-   - Si #eventRecurrence es select: opciones + JSON values
-   - Además inyectamos "Cada X" (input + unidad) si se puede
-========================= */
-let $recWrap = null;
-let $recToggle = null;
-let $recEvery = null;
-let $recUnit = null;
+/* =============================================================================
+   RECURRENCE UI PRO+ (limpia)
+   - Usa el #eventRecurrence como preset (select o hidden)
+   - Agrega bloque “Repetir” + “Cada X” + resumen (sin inline styles)
+============================================================================= */
+let $recUI = {
+  wrap: null,
+  toggle: null,
+  every: null,
+  unit: null,
+  summary: null,
+  hint: null
+};
 
-function ensureRecurrenceAdvancedUI() {
+function ensureRecurrenceSectionUI() {
   if (!$eventRecurrence) return;
 
-  // Buscamos contenedor natural
-  const parent = $eventRecurrence.parentElement || null;
-  if (!parent) return;
+  // Ubicación: al lado/dentro de la fila del control base (según tu layout)
+  const baseRow = $eventRecurrence.closest(".form-row") || $eventRecurrence.closest(".form-2col") || $eventRecurrence.parentElement;
+  if (!baseRow) return;
 
   // Evitar duplicar
-  if (parent.querySelector(".rec-adv")) {
-    // refrescar refs
-    $recWrap = parent.querySelector(".rec-adv");
-    $recToggle = parent.querySelector("#recToggle");
-    $recEvery = parent.querySelector("#recEvery");
-    $recUnit = parent.querySelector("#recUnit");
+  const existing = baseRow.querySelector(".recurrence-pro");
+  if (existing) {
+    $recUI.wrap = existing;
+    $recUI.toggle = existing.querySelector("#recProToggle");
+    $recUI.every = existing.querySelector("#recProEvery");
+    $recUI.unit = existing.querySelector("#recProUnit");
+    $recUI.summary = existing.querySelector("#recProSummary");
+    $recUI.hint = existing.querySelector("#recProHint");
+    bindRecurrenceUIOnce();
     return;
   }
 
-  // Inyectar UI compacta
-  const wrap = document.createElement("div");
-  wrap.className = "rec-adv";
-  wrap.style.display = "grid";
-  wrap.style.gridTemplateColumns = "1fr";
-  wrap.style.gap = "8px";
-  wrap.style.marginTop = "8px";
+  // Si tu layout form-2col usa el “slot” (div aria-hidden), lo reemplazamos
+  const slot = (baseRow.classList?.contains("form-2col"))
+    ? baseRow.querySelector('div[aria-hidden="true"]')
+    : null;
+
+  const wrap = document.createElement("section");
+  wrap.className = "recurrence-pro";
+  wrap.setAttribute("aria-label", "Repetición del evento");
 
   wrap.innerHTML = `
-    <label class="rec-adv-row" style="display:flex;align-items:center;gap:10px;">
-      <input type="checkbox" id="recToggle" />
-      <span style="font-weight:600;">Repetir</span>
-      <span class="muted" style="margin-left:auto;font-size:12px;">(cada X)</span>
-    </label>
+    <div class="recurrence-pro-head">
+      <div class="recurrence-pro-title">Repetición</div>
+      <div class="recurrence-pro-sub muted">Haz que este evento se repita automáticamente.</div>
+    </div>
 
-    <div class="rec-adv-controls hidden" id="recControls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <span class="muted" style="font-size:12px;">Cada</span>
-      <input type="number" id="recEvery" min="1" max="100" value="1"
-             style="width:90px;padding:10px 12px;border-radius:12px;border:1px solid rgba(11,16,32,.16);background:rgba(255,255,255,.7);" />
-      <select id="recUnit"
-              style="min-width:160px;padding:10px 12px;border-radius:12px;border:1px solid rgba(11,16,32,.16);background:rgba(255,255,255,.7);">
-        <option value="day">Día(s)</option>
-        <option value="week">Semana(s)</option>
-        <option value="month">Mes(es)</option>
-        <option value="year">Año(s)</option>
-      </select>
+    <div class="recurrence-pro-grid">
+      <div class="recurrence-pro-left">
+        <div class="recurrence-pro-field">
+          <div class="recurrence-pro-label">Preset</div>
+          <div class="recurrence-pro-control" data-rec-pro-anchor></div>
+          <div class="recurrence-pro-help muted">Ej: “Mensual” repite el mismo día cada mes.</div>
+        </div>
+      </div>
 
-      <button type="button" class="btn ghost tiny" id="recApplyPreset">Aplicar</button>
-      <span class="muted" id="recHint" style="font-size:12px;"></span>
+      <div class="recurrence-pro-right">
+        <label class="recurrence-pro-toggle">
+          <input type="checkbox" id="recProToggle" />
+          <span>Repetir</span>
+        </label>
+
+        <div class="recurrence-pro-controls hidden" id="recProControls">
+          <div class="recurrence-pro-every">
+            <span class="muted">Cada</span>
+            <input id="recProEvery" type="number" min="1" max="100" value="1" inputmode="numeric" />
+            <select id="recProUnit">
+              <option value="day">Día(s)</option>
+              <option value="week">Semana(s)</option>
+              <option value="month">Mes(es)</option>
+              <option value="year">Año(s)</option>
+            </select>
+          </div>
+          <div class="recurrence-pro-hint muted" id="recProHint"></div>
+        </div>
+
+        <div class="recurrence-pro-summary" id="recProSummary"></div>
+      </div>
     </div>
   `;
 
-  parent.appendChild(wrap);
+  // Mover el control base (#eventRecurrence) al ancla del bloque
+  const anchor = wrap.querySelector("[data-rec-pro-anchor]");
+  if (anchor) {
+    // Asegurar que sea visible y con la clase de tus inputs si aplica
+    anchor.appendChild($eventRecurrence);
+  }
+
+  if (slot) slot.replaceWith(wrap);
+  else $eventRecurrence.insertAdjacentElement("afterend", wrap);
 
   // refs
-  $recWrap = wrap;
-  $recToggle = wrap.querySelector("#recToggle");
-  $recEvery = wrap.querySelector("#recEvery");
-  $recUnit = wrap.querySelector("#recUnit");
-  const $controls = wrap.querySelector("#recControls");
-  const $hint = wrap.querySelector("#recHint");
-  const $apply = wrap.querySelector("#recApplyPreset");
+  $recUI.wrap = wrap;
+  $recUI.toggle = wrap.querySelector("#recProToggle");
+  $recUI.every = wrap.querySelector("#recProEvery");
+  $recUI.unit = wrap.querySelector("#recProUnit");
+  $recUI.summary = wrap.querySelector("#recProSummary");
+  $recUI.hint = wrap.querySelector("#recProHint");
 
-  const updateHint = () => {
-    const on = !!$recToggle?.checked;
-    if (!on) { if ($hint) $hint.textContent = ""; return; }
-    const unit = $recUnit?.value || "week";
-    const n = parseInt($recEvery?.value || "1", 10) || 1;
-    const label = recurrenceLabel({ unit, interval: n });
-    if ($hint) $hint.textContent = label ? `→ ${label}` : "";
-  };
+  bindRecurrenceUIOnce();
+  updateRecurrenceSummary();
+}
 
-  $recToggle?.addEventListener("change", () => {
-    $controls?.classList.toggle("hidden", !$recToggle.checked);
-    updateHint();
+function bindRecurrenceUIOnce() {
+  if (!$recUI.wrap || $recUI.wrap._bound) return;
+  $recUI.wrap._bound = true;
 
-    if (!$recToggle.checked) {
-      // apagar repetición
+  const $controls = $recUI.wrap.querySelector("#recProControls");
+
+  const onToggle = () => {
+    const on = !!$recUI.toggle?.checked;
+    $controls?.classList.toggle("hidden", !on);
+
+    if (!on) {
       setRecurrenceControlsValue(null);
     } else {
-      // si prenden, usar lo que esté puesto en los inputs
-      const unit = $recUnit?.value || "week";
-      const n = parseInt($recEvery?.value || "1", 10) || 1;
+      const unit = $recUI.unit?.value || "week";
+      const n = clampInt($recUI.every?.value, 1, 100, 1);
       setRecurrenceControlsValue({ unit, interval: n });
     }
-  });
+    updateRecurrenceSummary();
+  };
 
-  $recEvery?.addEventListener("input", updateHint);
-  $recUnit?.addEventListener("change", updateHint);
-
-  $apply?.addEventListener("click", () => {
-    if (!$recToggle?.checked) $recToggle.checked = true;
-    $controls?.classList.remove("hidden");
-    const unit = $recUnit?.value || "week";
-    const n = clampInt($recEvery?.value, 1, 100, 1);
+  const onEveryUnit = () => {
+    if (!$recUI.toggle?.checked) return;
+    const unit = $recUI.unit?.value || "week";
+    const n = clampInt($recUI.every?.value, 1, 100, 1);
     setRecurrenceControlsValue({ unit, interval: n });
-    updateHint();
-  });
+    updateRecurrenceSummary();
+  };
 
-  updateHint();
+  $recUI.toggle?.addEventListener("change", onToggle);
+  $recUI.every?.addEventListener("input", onEveryUnit);
+  $recUI.unit?.addEventListener("change", onEveryUnit);
+
+  // Si cambian preset select, sincroniza toggle + “cada X”
+  if ($eventRecurrence && !$eventRecurrence._recBound) {
+    $eventRecurrence.addEventListener("change", () => {
+      const rec = parseRecurrenceFromControlValue($eventRecurrence.value);
+      syncAdvancedRecUI(rec);
+      updateRecurrenceSummary();
+    });
+    $eventRecurrence._recBound = true;
+  }
+}
+
+function updateRecurrenceSummary() {
+  if (!$recUI.wrap || !$recUI.summary || !$recUI.hint) return;
+
+  const rec = readRecurrenceFromModal();
+  const label = recurrenceLabel(rec);
+
+  if (!rec) {
+    $recUI.summary.textContent = "Sin repetición";
+    $recUI.summary.classList.remove("on");
+    $recUI.hint.textContent = "";
+    return;
+  }
+
+  $recUI.summary.textContent = `Se repetirá: ${label}`;
+  $recUI.summary.classList.add("on");
+
+  // Hint corto
+  $recUI.hint.textContent = label ? `→ ${label}` : "";
 }
 
 function populateRecurrenceSelect() {
@@ -1062,11 +1125,9 @@ function populateRecurrenceSelect() {
 
   const prev = String($eventRecurrence.value || "").trim();
 
-  // Opciones base + pro (JSON)
   const opts = [
     { value: "", label: "—" },
 
-    // Atajos legibles (valores JSON)
     { value: JSON.stringify({ unit: "day", interval: 1 }),   label: "Diario" },
     { value: JSON.stringify({ unit: "week", interval: 1 }),  label: "Semanal" },
     { value: JSON.stringify({ unit: "week", interval: 2 }),  label: "Cada 2 semanas" },
@@ -1093,15 +1154,6 @@ function populateRecurrenceSelect() {
 
   if (opts.some(o => o.value === prevVal)) $eventRecurrence.value = prevVal;
   else $eventRecurrence.value = ""; // fallback
-
-  // Si cambian select, sincroniza advanced UI
-  if (!$eventRecurrence._recBound) {
-    $eventRecurrence.addEventListener("change", () => {
-      const rec = parseRecurrenceFromControlValue($eventRecurrence.value);
-      syncAdvancedRecUI(rec);
-    });
-    $eventRecurrence._recBound = true;
-  }
 }
 
 function setRecurrenceControlsValue(rec) {
@@ -1113,43 +1165,40 @@ function setRecurrenceControlsValue(rec) {
     if (isSelect) {
       $eventRecurrence.value = recurrenceToSelectValue(r);
     } else {
-      // si era input/hiddens: guarda JSON string
       $eventRecurrence.value = r ? recurrenceToSelectValue(r) : "";
     }
   }
 
   // advanced controls
   syncAdvancedRecUI(r);
+  updateRecurrenceSummary();
 }
 
 function syncAdvancedRecUI(rec) {
   const r = normalizeRecurrence(rec);
 
-  if (!$recWrap) return;
-  const $controls = $recWrap.querySelector("#recControls");
-  const $hint = $recWrap.querySelector("#recHint");
-
-  if (!$recToggle || !$recEvery || !$recUnit) return;
+  if (!$recUI.wrap || !$recUI.toggle || !$recUI.every || !$recUI.unit) return;
+  const $controls = $recUI.wrap.querySelector("#recProControls");
 
   if (!r) {
-    $recToggle.checked = false;
+    $recUI.toggle.checked = false;
     $controls?.classList.add("hidden");
-    if ($hint) $hint.textContent = "";
+    $recUI.every.value = "1";
+    $recUI.unit.value = "week";
     return;
   }
 
-  $recToggle.checked = true;
+  $recUI.toggle.checked = true;
   $controls?.classList.remove("hidden");
-  $recEvery.value = String(r.interval || 1);
-  $recUnit.value = r.unit || "week";
-  if ($hint) $hint.textContent = `→ ${recurrenceLabel(r)}`;
+  $recUI.every.value = String(r.interval || 1);
+  $recUI.unit.value = r.unit || "week";
 }
 
 function readRecurrenceFromModal() {
   // Preferimos advanced UI si existe y está activada
-  if ($recToggle && $recEvery && $recUnit && $recToggle.checked) {
-    const interval = clampInt($recEvery.value, 1, 100, 1);
-    const unit = String($recUnit.value || "week").trim();
+  if ($recUI.toggle && $recUI.every && $recUI.unit && $recUI.toggle.checked) {
+    const interval = clampInt($recUI.every.value, 1, 100, 1);
+    const unit = String($recUI.unit.value || "week").trim();
     return normalizeRecurrence({ unit, interval });
   }
 
