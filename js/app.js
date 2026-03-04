@@ -1,26 +1,34 @@
 /* =============================================================================
-  js/app.js — Orquestador (Auth -> UI -> Firestore)
+  js/app.js — Orquestador (Auth -> UI -> Firestore) — vNEXT (RBAC + READONLY + SAFER SUBS)
+  -----------------------------------------------------------------------------
   - Escucha auth:changed (de auth.js)
-  - Inicializa UI
-  - Suscribe eventos del mes en tiempo real
-  - CRUD (create/update/soft delete) usando db.js
+      detail esperado:
+        { user, allowed, email, role, canWrite, allowedCategories }
+  - Inicializa UI una sola vez
+  - Suscribe eventos del mes en tiempo real (con LOOKBACK para recurrencias “semilla”)
+  - CRUD usando db.js, pero:
+      ✅ bloquea escrituras si canWrite === false (Académico = solo ver)
+      ✅ filtra consultas por allowedCategories (RBAC cliente)
 ============================================================================= */
 
 import { initUI, setEvents, setMonth, getCurrentView } from "./ui.js";
 import { createEvent, updateEvent, softDeleteEvent, subscribeEventsInRange } from "./db.js";
 import { startOfMonth, endOfMonth } from "./utils.js";
 
-// Para que las repeticiones (mensual/anual) aparezcan en meses futuros,
-// necesitamos cargar también los "eventos semilla" que fueron creados en meses anteriores.
-// Si solo consultamos el mes visible, el evento base no viene y no hay de dónde expandir.
+// Para que repeticiones aparezcan en meses futuros,
+// cargamos eventos “semilla” de meses anteriores.
 const LOOKBACK_YEARS = 5;
 
 /* =========================
    Estado global app
 ========================= */
-let CURRENT_USER = null;     // Firebase user
-let USER_EMAIL = "";         // email normalizado
-let unsubMonth = null;       // función unsubscribe del onSnapshot
+let CURRENT_USER = null;           // Firebase user
+let USER_EMAIL = "";               // email normalizado
+let USER_ROLE = null;              // "administrativo" | "academico" | null
+let CAN_WRITE = false;             // permisos derivados
+let ALLOWED_CATEGORIES = [];       // categorías permitidas para queries
+
+let unsubMonth = null;             // unsubscribe del onSnapshot
 let uiInitialized = false;
 
 /* =========================
@@ -32,23 +40,28 @@ function safeUnsub() {
 }
 
 function monthRange(year, monthIndex) {
-  // Nota: a propósito traemos varios años hacia atrás para incluir eventos recurrentes “semilla”.
-  // UI se encarga de mostrar solo lo del rango visible (no te va a llenar el calendario de 2021).
-  const from = startOfMonth(year - LOOKBACK_YEARS, 0); // 1 de enero del año - LOOKBACK
+  // Traemos varios años hacia atrás para incluir “semillas” de recurrencia.
+  // La UI se encarga de mostrar solo el mes visible.
+  const from = startOfMonth(year - LOOKBACK_YEARS, 0); // 1 enero (año - lookback)
   const to   = endOfMonth(year, monthIndex);           // fin del mes visible
   return { from, to };
 }
-function requireEmail() {
-  if (!USER_EMAIL) throw new Error("No hay sesión activa.");
+
+function requireSession() {
+  if (!CURRENT_USER || !USER_EMAIL) throw new Error("No hay sesión activa.");
+}
+
+function requireWrite() {
+  if (!CAN_WRITE) throw new Error("Tu usuario está en modo solo lectura.");
 }
 
 function toast(msg) {
-  // Minimalista por ahora. Después lo cambiamos por un toast bonito.
+  // Minimalista por ahora
   console.log(msg);
 }
 
 /* =========================
-   Subscribir eventos del mes
+   Subscribir eventos del mes (con RBAC)
 ========================= */
 function subscribeMonth(year, monthIndex) {
   safeUnsub();
@@ -64,19 +77,24 @@ function subscribeMonth(year, monthIndex) {
     (err) => {
       console.error(err);
       alert("No se pudieron cargar eventos (revisa permisos o conexión).");
-    }
+    },
+    // opts RBAC cliente (db.js lo usa para filtrar category in allowedCategories)
+    { allowedCategories: ALLOWED_CATEGORIES }
   );
 }
 
 /* =========================
    UI callbacks (CRUD)
+   - Bloquean escritura si CAN_WRITE = false
 ========================= */
 async function handleCreate(payload) {
   try {
-    requireEmail();
+    requireSession();
+    requireWrite();
+
     await createEvent(payload, USER_EMAIL);
     toast("Evento creado ✅");
-    // No llamamos setEvents manualmente: el realtime snapshot actualiza solo.
+    // El snapshot realtime actualiza solo
   } catch (e) {
     console.error("Create error:", e);
     alert(e?.message || "No se pudo crear el evento.");
@@ -85,7 +103,9 @@ async function handleCreate(payload) {
 
 async function handleUpdate(id, payload) {
   try {
-    requireEmail();
+    requireSession();
+    requireWrite();
+
     await updateEvent(id, payload, USER_EMAIL);
     toast("Evento actualizado ✅");
   } catch (e) {
@@ -96,7 +116,9 @@ async function handleUpdate(id, payload) {
 
 async function handleDelete(id) {
   try {
-    requireEmail();
+    requireSession();
+    requireWrite();
+
     const ok = confirm("¿Seguro que deseas eliminar este evento? (Queda en papelera)");
     if (!ok) return;
 
@@ -109,7 +131,6 @@ async function handleDelete(id) {
 }
 
 function handleNavigate({ year, monthIndex }) {
-  // Re-suscribe al mes nuevo
   subscribeMonth(year, monthIndex);
 }
 
@@ -136,28 +157,39 @@ window.addEventListener("auth:changed", (ev) => {
   const detail = ev?.detail || {};
   const { user, allowed } = detail;
 
-  // Si no hay acceso, corta todo
+  // No permitido / logged out
   if (!user || !allowed) {
     CURRENT_USER = null;
     USER_EMAIL = "";
+    USER_ROLE = null;
+    CAN_WRITE = false;
+    ALLOWED_CATEGORIES = [];
+
     safeUnsub();
-    // UI queda escondida desde auth.js, no hacemos más.
+    // UI ya queda escondida desde auth.js
     return;
   }
 
-  // Autorizado
+  // Autorizado (con roles)
   CURRENT_USER = user;
-  USER_EMAIL = (user.email || "").toLowerCase().trim();
+  USER_EMAIL = (detail.email || user.email || "").toLowerCase().trim();
 
+  USER_ROLE = detail.role || null;
+  CAN_WRITE = !!detail.canWrite;
+  ALLOWED_CATEGORIES = Array.isArray(detail.allowedCategories) ? detail.allowedCategories : [];
+
+  // UI
   ensureUI();
 
   // Mes actual (el que está mostrando UI)
   const { year, monthIndex } = getCurrentView();
-  setMonth(year, monthIndex);        // asegura título/grilla
-  subscribeMonth(year, monthIndex);  // carga eventos realtime
+  setMonth(year, monthIndex);
+  subscribeMonth(year, monthIndex);
+
+  // Opcional: log útil para debug
+  console.log("[auth] role:", USER_ROLE, "canWrite:", CAN_WRITE, "cats:", ALLOWED_CATEGORIES);
 });
 
-/* =========================
-   Extra: al recargar la página,
-   auth.js disparará auth:changed automáticamente.
-========================= */
+/* =============================================================================
+  Nota: al recargar la página, auth.js disparará auth:changed automáticamente.
+============================================================================= */

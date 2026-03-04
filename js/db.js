@@ -1,16 +1,24 @@
 /* =============================================================================
-  js/db.js — Firestore CRUD (events) — vPRO∞ (ASSIGNEE + RECURRENCE PRO + FAST UPSERT)
+  js/db.js — Firestore CRUD (events) — vPRO∞ (RBAC READY + ASSIGNEE + RECURRENCE PRO + FAST UPSERT)
   -----------------------------------------------------------------------------
   ✅ create/update/softDelete/restore
   ✅ get + subscribe por rango (month-friendly)
+  ✅ Filtro por categorías (allowedCategories) para roles (Académico/Admin)
   ✅ upsertMany (import) con sourceHash anti-duplicados (optimizado con where-in)
-  ✅ Rango usa SOLO orderBy(dateStart)
+  ✅ Rango usa SOLO orderBy(dateStart) (menos índices)
 
-  PRO Recurrence (nuevo):
+  PRO Recurrence:
   - recurrence: null | { type:"interval", unit:"day|week|month|year", interval:number }
-  - Backward compatible con strings: "", "weekly", "monthly", "yearly"
-  - Tolerante: UI puede mandar JSON string en recurrence (ej: '{"unit":"week","interval":2}')
+  - Backward compatible: "", "weekly", "monthly", "yearly"
+  - Tolerante: puede venir JSON string en recurrence (ej: '{"unit":"week","interval":2}')
 
+  RBAC (cliente):
+  - buildRangeQuery(from,to,{ allowedCategories })
+  - allowedCategories vacío -> no filtra (modo admin/legacy)
+  - allowedCategories <= 10 -> where("category","in", allowedCategories)
+  - >10 -> se omite el filtro (limitación Firestore "in")
+
+  Nota inevitable: la seguridad real va en Firestore Rules. 🧱
 ============================================================================= */
 
 import { db, serverTimestamp, Timestamp } from "./firebase.js";
@@ -44,6 +52,9 @@ const ALLOWED_STATUS = new Set(["pending", "done", "cancelled"]);
 const RECURRENCE_UNITS = new Set(["day", "week", "month", "year"]);
 const RECURRENCE_MAX_INTERVAL = 100;
 
+// Firestore where-in max
+const WHERE_IN_MAX = 10;
+
 /** Validación simple yyyy-mm-dd (y fecha real) */
 function isValidISODate(dateISO) {
   if (!dateISO || typeof dateISO !== "string") return false;
@@ -66,7 +77,7 @@ function stableStringify(value) {
     if (value === null || value === undefined) return "";
     if (typeof value !== "object") return String(value);
 
-    // Ordenar claves a un nivel (suficiente para este caso)
+    // Ordenar claves a un nivel (suficiente aquí)
     const keys = Object.keys(value).sort();
     const obj = {};
     for (const k of keys) obj[k] = value[k];
@@ -78,16 +89,11 @@ function stableStringify(value) {
 
 /** Null-safe compare (soporta objetos) */
 function sameValue(a, b) {
-  // igualdad rápida
   if (a === b) return true;
-
-  // null/undefined/""
-  const sa = stableStringify(a);
-  const sb = stableStringify(b);
-  return sa === sb;
+  return stableStringify(a) === stableStringify(b);
 }
 
-/** Pequeña ayuda: ignora undefined y deja null/"" explícitos */
+/** Ignora undefined y deja null/"" explícitos */
 function pickDefined(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj || {})) {
@@ -96,12 +102,37 @@ function pickDefined(obj) {
   return out;
 }
 
+/* =========================
+   RBAC helpers (categorías)
+========================= */
+function normalizeAllowedCategories_(allowedCategories) {
+  const arr = Array.isArray(allowedCategories) ? allowedCategories : [];
+  const clean = arr.map(c => normText(c)).filter(Boolean);
+  return Array.from(new Set(clean));
+}
+
+function withCategoryFilter_(constraints, allowedCategories) {
+  const cats = normalizeAllowedCategories_(allowedCategories);
+  if (!cats.length) return constraints;
+
+  if (cats.length > WHERE_IN_MAX) {
+    console.warn(
+      `[db] allowedCategories tiene ${cats.length} items (>10). ` +
+      `Firestore no soporta where-in > 10. Se omitirá el filtro de categoría.`
+    );
+    return constraints;
+  }
+
+  return [...constraints, where("category", "in", cats)];
+}
+
+/* =========================
+   Recurrence helpers
+========================= */
 /** Acepta objeto recurrence o string legacy o JSON string */
 function normalizeRecurrence(raw) {
-  // 1) vacío
   if (raw === "" || raw === null || raw === undefined) return null;
 
-  // 2) si viene como string
   if (typeof raw === "string") {
     const s = normText(raw);
 
@@ -110,7 +141,7 @@ function normalizeRecurrence(raw) {
     if (s === "monthly") return { type: "interval", unit: "month", interval: 1 };
     if (s === "yearly")  return { type: "interval", unit: "year",  interval: 1 };
 
-    // puede venir como JSON string: {"unit":"week","interval":2}
+    // JSON string
     if (s.startsWith("{") && s.endsWith("}")) {
       try {
         const parsed = JSON.parse(raw);
@@ -120,11 +151,9 @@ function normalizeRecurrence(raw) {
       }
     }
 
-    // si llega otra cosa rara: lo apagamos
     return null;
   }
 
-  // 3) objeto recurrence
   if (typeof raw === "object") {
     const unit = normText(raw.unit || raw.frequency || raw.everyUnit || "");
     const intervalRaw = raw.interval ?? raw.every ?? raw.count ?? 1;
@@ -146,7 +175,7 @@ export function recurrenceToLegacyString(rec) {
   if (r.unit === "week" && r.interval === 1) return "weekly";
   if (r.unit === "month" && r.interval === 1) return "monthly";
   if (r.unit === "year" && r.interval === 1) return "yearly";
-  return ""; // no hay legacy para intervalos avanzados
+  return "";
 }
 
 /* =========================
@@ -170,9 +199,9 @@ export function toDateISO(value) {
 
 /* =========================
    Normalizador de evento
-   - strict: exige campos obligatorios (para create)
-   - tolerant: rellena con fallback (para update/upsert)
-   - soporta aliases desde UI para no romper
+   - strict: exige campos obligatorios (create)
+   - tolerant: usa fallback (update/upsert)
+   - soporta aliases desde UI
 ========================= */
 function extractAssignedTo(input = {}, fallback = {}) {
   const val =
@@ -231,10 +260,6 @@ function normalizeEventInputStrict(input = {}) {
   return { title, category, status, notes, dateISO, assignedTo, recurrence };
 }
 
-/**
- * Normaliza usando fallback (para update parcial o upsert).
- * Si no hay dateISO ni fallback, lanza.
- */
 function normalizeEventInputTolerant(input = {}, fallback = {}) {
   const title = normText(input.title ?? fallback.title);
   const category = normText(input.category ?? fallback.category);
@@ -270,10 +295,7 @@ export async function createEvent(input, userEmail) {
 
     assignedTo,
 
-    // Recurrence PRO (objeto) o null
     recurrence: recurrence || null,
-
-    // Opcional: guardamos también legacy string para debugging/compat (no obligatorio)
     recurrenceLegacy: recurrenceToLegacyString(recurrence),
 
     dateStart: dateISOToTimestamp(dateISO),
@@ -286,7 +308,6 @@ export async function createEvent(input, userEmail) {
 
     deletedAt: null,
 
-    // import/metadata opcional
     source: normText(input?.source || "manual") || "manual",
     sourceHash: input?.sourceHash ? normText(input.sourceHash) : null
   };
@@ -297,8 +318,6 @@ export async function createEvent(input, userEmail) {
 
 /* =========================
    UPDATE
-   - tolera input parcial: mezcla con evento existente si hace falta
-   - evita escribir si no cambia nada real
 ========================= */
 export async function updateEvent(eventId, input, userEmail) {
   const id = normText(eventId);
@@ -396,22 +415,35 @@ export async function getEvent(eventId) {
 }
 
 /* =========================
-   Query builder por rango
+   Query builder por rango (+ RBAC categorías)
    - Filtra deletedAt == null
    - dateStart in [from..to]
+   - (opcional) category in allowedCategories
    - orderBy SOLO dateStart (menos índices)
 ========================= */
-function buildRangeQuery(fromDate, toDate) {
+/**
+ * @param {Date} fromDate
+ * @param {Date} toDate
+ * @param {Object} [opts]
+ * @param {string[]} [opts.allowedCategories]
+ */
+function buildRangeQuery(fromDate, toDate, opts = {}) {
   if (!fromDate || !toDate) throw new Error("fromDate y toDate son requeridos");
 
   const from = Timestamp.fromDate(startOfDay(fromDate));
   const to = Timestamp.fromDate(endOfDay(toDate));
 
-  return query(
-    EVENTS_COL,
+  const constraintsBase = [
     where("deletedAt", "==", null),
     where("dateStart", ">=", from),
     where("dateStart", "<=", to),
+  ];
+
+  const constraints = withCategoryFilter_(constraintsBase, opts.allowedCategories);
+
+  return query(
+    EVENTS_COL,
+    ...constraints,
     orderBy("dateStart", "asc")
   );
 }
@@ -419,8 +451,8 @@ function buildRangeQuery(fromDate, toDate) {
 /* =========================
    GET por rango (month-friendly)
 ========================= */
-export async function getEventsInRange(fromDate, toDate) {
-  const q = buildRangeQuery(fromDate, toDate);
+export async function getEventsInRange(fromDate, toDate, opts = {}) {
+  const q = buildRangeQuery(fromDate, toDate, opts);
   const snaps = await getDocs(q);
   return snaps.docs.map(mapEventDoc);
 }
@@ -428,8 +460,8 @@ export async function getEventsInRange(fromDate, toDate) {
 /* =========================
    Realtime subscribe (ideal para UI)
 ========================= */
-export function subscribeEventsInRange(fromDate, toDate, cb, onError) {
-  const q = buildRangeQuery(fromDate, toDate);
+export function subscribeEventsInRange(fromDate, toDate, cb, onError, opts = {}) {
+  const q = buildRangeQuery(fromDate, toDate, opts);
 
   return onSnapshot(
     q,
@@ -459,7 +491,6 @@ export async function findEventBySourceHash(sourceHash) {
 
 /* =========================
    Import helper: buscar MUCHOS sourceHash (fast)
-   - Firestore "in" permite máx 10 valores por query
 ========================= */
 export async function findManyBySourceHash(hashes = []) {
   const list = (Array.isArray(hashes) ? hashes : [])
@@ -471,13 +502,13 @@ export async function findManyBySourceHash(hashes = []) {
 
   const uniq = Array.from(new Set(list));
 
-  for (let i = 0; i < uniq.length; i += 10) {
-    const chunk = uniq.slice(i, i + 10);
+  for (let i = 0; i < uniq.length; i += WHERE_IN_MAX) {
+    const chunk = uniq.slice(i, i + WHERE_IN_MAX);
 
     const q = query(
       EVENTS_COL,
       where("sourceHash", "in", chunk),
-      limit(10)
+      limit(WHERE_IN_MAX)
     );
 
     const snaps = await getDocs(q);
@@ -492,10 +523,6 @@ export async function findManyBySourceHash(hashes = []) {
 
 /* =========================
    Upsert many (import)
-   - Si existe sourceHash: update
-   - Si no existe: create
-   - Skip si no cambia nada real
-   - Optimizado: resuelve existing por hash en bloque
 ========================= */
 export async function upsertMany(events = [], userEmail) {
   const results = { created: 0, updated: 0, skipped: 0, errors: 0 };
@@ -518,7 +545,6 @@ export async function upsertMany(events = [], userEmail) {
     try {
       const sourceHash = normText(raw?.sourceHash || "");
 
-      // Sin hash: create directo
       if (!sourceHash) {
         const created = await createEvent(raw, email);
         results.created++;
@@ -526,10 +552,8 @@ export async function upsertMany(events = [], userEmail) {
         continue;
       }
 
-      // Con hash: intenta mapa primero
       let existing = existingByHash.get(sourceHash) || null;
 
-      // fallback por si no vino en el batch
       if (!existing) {
         existing = await findEventBySourceHash(sourceHash);
         if (existing) existingByHash.set(sourceHash, existing);
@@ -582,7 +606,6 @@ function mapEventDoc(docSnap) {
   const dateStart = data.dateStart || null;
   const dateISO = data.dateISO || toDateISO(dateStart);
 
-  // Recurrence: soporta objeto o legacy string
   const rec =
     (data.recurrence !== undefined ? data.recurrence : null) ??
     (data.recurrenceLegacy !== undefined ? data.recurrenceLegacy : null) ??
@@ -600,10 +623,7 @@ function mapEventDoc(docSnap) {
 
     assignedTo: data.assignedTo || "",
 
-    // recurrence PRO (obj) o null
     recurrence,
-
-    // (opcional) por si UI vieja lo usa
     recurrenceLegacy: data.recurrenceLegacy || recurrenceToLegacyString(recurrence),
 
     dateStart,
