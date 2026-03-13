@@ -6,47 +6,53 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 
   <title>Calendario · Musicala</title>
-  <meta name="description" content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios." />
+  <meta
+    name="description"
+    content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios."
+  />
   <meta name="color-scheme" content="light" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="referrer" content="strict-origin-when-cross-origin" />
   <meta name="format-detection" content="telephone=no" />
+  <meta name="robots" content="noindex, nofollow" />
 
-  <!-- Social (Open Graph / Twitter) -->
+  <!-- Social -->
   <meta property="og:title" content="Calendario · Musicala" />
-  <meta property="og:description" content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios." />
+  <meta
+    property="og:description"
+    content="Calendario interno de Musicala: eventos, responsables, estados y recordatorios."
+  />
   <meta property="og:type" content="website" />
-  <!-- <meta property="og:image" content="./og-calendar.png" /> -->
   <meta name="twitter:card" content="summary_large_image" />
 
-  <!-- Favicons (NO PWA; solo estándar) -->
+  <!-- Favicons -->
   <link rel="icon" href="./favicon.ico" />
-  <!-- Opcionales si luego tienen pngs -->
-  <!-- <link rel="icon" type="image/png" sizes="32x32" href="./icons/icon-32.png" /> -->
-  <!-- <link rel="icon" type="image/png" sizes="16x16" href="./icons/icon-16.png" /> -->
 
-  <!-- Fuente (preconnect + load no bloqueante) -->
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+  />
 
-  <!-- Preload logo (mejor percepción al cargar) -->
+  <!-- Assets -->
   <link rel="preload" as="image" href="./logo.png" />
 
-  <!-- Estilos -->
+  <!-- Styles -->
   <link rel="stylesheet" href="styles.css" />
-
-  <!-- Pequeño hardening -->
-  <meta name="robots" content="noindex, nofollow" />
 </head>
 
 <body>
-  <!-- Accesibilidad: se ve SOLO con teclado (CSS controla) -->
   <a class="skip-link" href="#app">Saltar al contenido</a>
 
-  <!-- Live region global para mensajes importantes -->
-  <div class="sr-only" role="status" aria-live="polite" aria-atomic="true" id="srStatus"></div>
+  <div
+    id="srStatus"
+    class="sr-only"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  ></div>
 
   <noscript>
     <div style="max-width:900px;margin:16px auto;padding:14px;border:1px solid rgba(15,23,42,.14);border-radius:14px;background:#fff;">
@@ -69,8 +75,8 @@
           class="brand-logo"
           loading="eager"
           decoding="async"
-          width="44"
-          height="44"
+          width="52"
+          height="52"
         />
         <div class="brand-text">
           <span class="brand-title">Calendario</span>
@@ -78,7 +84,12 @@
         </div>
       </div>
 
-      <span id="userEmail" class="user-email hidden" aria-live="polite" aria-atomic="true"></span>
+      <span
+        id="userEmail"
+        class="user-email hidden"
+        aria-live="polite"
+        aria-atomic="true"
+      ></span>
     </div>
 
     <div class="header-right" aria-label="Sesión">
@@ -174,28 +185,34 @@
       </div>
     </section>
 
-    <!-- ======================
-         Panel Hoy / Próximos 7
-    ======================= -->
+    <!-- Overview -->
     <section class="overview" aria-label="Resumen">
-      <div class="overview-card" id="overviewToday">
-        <div class="overview-title">Hoy</div>
-        <div class="overview-body" id="todayList" aria-live="polite" aria-atomic="true">
+      <article class="overview-card" id="overviewToday" aria-labelledby="overviewTodayTitle">
+        <h3 class="overview-title" id="overviewTodayTitle">Hoy</h3>
+        <div
+          class="overview-body"
+          id="todayList"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           <span class="muted">Sin eventos</span>
         </div>
-      </div>
+      </article>
 
-      <div class="overview-card" id="overviewNext">
-        <div class="overview-title">Próximos 7 días</div>
-        <div class="overview-body" id="nextList" aria-live="polite" aria-atomic="true">
+      <article class="overview-card" id="overviewNext" aria-labelledby="overviewNextTitle">
+        <h3 class="overview-title" id="overviewNextTitle">Próximos 7 días</h3>
+        <div
+          class="overview-body"
+          id="nextList"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           <span class="muted">Sin eventos</span>
         </div>
-      </div>
+      </article>
     </section>
 
-    <!-- ======================
-         Búsqueda + Vista
-    ======================= -->
+    <!-- Búsqueda + vista -->
     <section class="controls" aria-label="Controles">
       <div class="controls-left">
         <label class="sr-only" for="searchEvents">Buscar eventos</label>
@@ -216,8 +233,8 @@
           id="btnViewMonth"
           class="seg active"
           type="button"
-          aria-selected="true"
           role="tab"
+          aria-selected="true"
           aria-controls="monthView"
         >
           Mes
@@ -227,8 +244,8 @@
           id="btnViewList"
           class="seg"
           type="button"
-          aria-selected="false"
           role="tab"
+          aria-selected="false"
           aria-controls="listView"
         >
           Lista
@@ -236,11 +253,7 @@
       </div>
     </section>
 
-    <!-- ======================
-         Filtros
-         ✅ IDs alineados con ui.js:
-            filterCategory / filterStatus / filterAssignedTo
-    ======================= -->
+    <!-- Filtros -->
     <section class="filters" aria-label="Filtros">
       <div class="filter-row">
         <div class="filter-field">
@@ -269,10 +282,14 @@
       </div>
     </section>
 
-    <!-- ======================
-         Vista Mes (Calendario)
-    ======================= -->
-    <section class="calendar" id="monthView" aria-label="Calendario mensual">
+    <!-- Vista Mes -->
+    <section
+      class="calendar"
+      id="monthView"
+      role="tabpanel"
+      aria-labelledby="btnViewMonth"
+      aria-label="Calendario mensual"
+    >
       <div
         class="calendar-grid"
         id="calendarGrid"
@@ -284,26 +301,37 @@
       </div>
     </section>
 
-    <!-- ======================
-         Vista Lista
-    ======================= -->
-    <section class="list-view hidden" id="listView" aria-label="Lista de eventos">
+    <!-- Vista Lista -->
+    <section
+      class="list-view hidden"
+      id="listView"
+      role="tabpanel"
+      aria-labelledby="btnViewList"
+      aria-label="Lista de eventos"
+    >
       <div class="list-head">
         <h3 id="listTitle">Eventos</h3>
-        <div class="list-meta" id="listMeta" aria-live="polite" aria-atomic="true"></div>
+        <div
+          class="list-meta"
+          id="listMeta"
+          aria-live="polite"
+          aria-atomic="true"
+        ></div>
       </div>
 
-      <div class="list-body" id="listBody" aria-live="polite" aria-atomic="false">
+      <div
+        class="list-body"
+        id="listBody"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         <!-- render por JS -->
       </div>
     </section>
-
   </main>
 
   <!-- ======================
        MODAL EVENTO
-       ✅ IDs alineados con ui.js:
-          eventAssignedTo + eventRecurrence
   ======================= -->
   <div
     id="eventModal"
@@ -315,13 +343,12 @@
   >
     <div class="modal-content" role="document">
       <div class="modal-head">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
-          <div>
+        <div class="modal-head-row">
+          <div class="modal-head-copy">
             <h3 id="modalTitle">Nuevo evento</h3>
             <p id="modalDesc" class="muted">Crea o edita una tarea del calendario.</p>
           </div>
 
-          <!-- Botón cerrar -->
           <button
             type="button"
             class="btn ghost"
@@ -336,10 +363,9 @@
       </div>
 
       <form id="eventForm" novalidate>
-        <!-- Guard para enter key -->
         <button type="submit" class="sr-only" aria-hidden="true" tabindex="-1">submit</button>
 
-        <label>
+        <label for="eventTitle">
           Título
           <input
             type="text"
@@ -352,19 +378,19 @@
         </label>
 
         <div class="form-2col">
-          <label>
+          <label for="eventCategory">
             Categoría
             <select id="eventCategory" required aria-label="Categoría"></select>
           </label>
 
-          <label>
+          <label for="eventDate">
             Fecha
             <input type="date" id="eventDate" required aria-label="Fecha" />
           </label>
         </div>
 
         <div class="form-2col">
-          <label>
+          <label for="eventStatus">
             Estado
             <select id="eventStatus" aria-label="Estado">
               <option value="pending">Pendiente</option>
@@ -373,25 +399,27 @@
             </select>
           </label>
 
-          <label>
+          <label for="eventAssignedTo">
             Responsable
             <select id="eventAssignedTo" aria-label="Responsable" autocomplete="off">
               <option value="">Sin asignar</option>
-              <!-- ui.js rellena opciones -->
             </select>
           </label>
         </div>
 
-        <div class="form-2col">
-          <label>
+        <!-- bloque pensado para que ui.js inserte recurrence-pro sin verse raro -->
+        <div class="form-2col form-row-recurrence">
+          <label for="eventRecurrence">
             Repetición
-            <select id="eventRecurrence" aria-label="Repetición"></select>
+            <select id="eventRecurrence" aria-label="Repetición">
+              <option value="">—</option>
+            </select>
           </label>
 
-          <div aria-hidden="true"></div>
+          <div class="form-placeholder" aria-hidden="true"></div>
         </div>
 
-        <label>
+        <label for="eventNotes">
           Notas
           <textarea
             id="eventNotes"
@@ -402,15 +430,32 @@
         </label>
 
         <div class="modal-actions">
-          <button type="button" id="btnDeleteEvent" class="btn danger hidden" aria-label="Eliminar evento">
+          <button
+            type="button"
+            id="btnDeleteEvent"
+            class="btn danger hidden"
+            aria-label="Eliminar evento"
+          >
             Eliminar
           </button>
 
           <div class="modal-actions-right">
-            <button type="button" id="btnCancelModal" class="btn ghost" aria-label="Cancelar" data-modal-close="true">
+            <button
+              type="button"
+              id="btnCancelModal"
+              class="btn ghost"
+              aria-label="Cancelar"
+              data-modal-close="true"
+            >
               Cancelar
             </button>
-            <button type="submit" class="btn primary" id="btnSaveEvent" aria-label="Guardar evento">
+
+            <button
+              type="submit"
+              class="btn primary"
+              id="btnSaveEvent"
+              aria-label="Guardar evento"
+            >
               Guardar
             </button>
           </div>
@@ -419,15 +464,22 @@
     </div>
   </div>
 
-  <!-- Overlay -->
-  <div id="modalOverlay" class="overlay hidden" aria-hidden="true" data-modal-close="true"></div>
+  <div
+    id="modalOverlay"
+    class="overlay hidden"
+    aria-hidden="true"
+    data-modal-close="true"
+  ></div>
 
-  <!-- Toast host -->
-  <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
+  <div
+    id="toastHost"
+    class="toast-host"
+    aria-live="polite"
+    aria-atomic="true"
+  ></div>
 
   <!-- ======================
        SCRIPTS
-       Nota: mantener el orden ayuda a evitar “undefined imports”
   ======================= -->
   <script type="module" src="js/firebase.js"></script>
   <script type="module" src="js/auth.js"></script>
@@ -438,24 +490,22 @@
   <script type="module" src="js/ui.js"></script>
   <script type="module" src="js/app.js"></script>
 
-  <!-- Mini-hardening UX (sin tocar tu ui.js): close modal con overlay/X y Ctrl+K focus search -->
+  <!-- fallback UX -->
   <script>
     (function () {
       const $ = (q) => document.querySelector(q);
-      const overlay = $('#modalOverlay');
-      const modal = $('#eventModal');
-      const btnCancel = $('#btnCancelModal');
-      const btnCloseX = $('#btnCloseModalX');
-      const search = $('#searchEvents');
+      const overlay = $("#modalOverlay");
+      const modal = $("#eventModal");
+      const btnCancel = $("#btnCancelModal");
+      const btnCloseX = $("#btnCloseModalX");
+      const search = $("#searchEvents");
 
       function tryCloseModal() {
-        if (!modal || modal.classList.contains('hidden')) return;
-        // Preferimos disparar la misma ruta del sistema (para que ui.js limpie estado)
+        if (!modal || modal.classList.contains("hidden")) return;
         if (btnCancel) btnCancel.click();
       }
 
-      // Delegado: elementos con data-modal-close cierran
-      document.addEventListener('click', (e) => {
+      document.addEventListener("click", (e) => {
         const t = e.target;
         if (t && t.closest && t.closest('[data-modal-close="true"]')) {
           e.preventDefault();
@@ -463,27 +513,23 @@
         }
       });
 
-      // Escape cierra modal (si ui.js no lo hace)
-      document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') tryCloseModal();
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") tryCloseModal();
 
-        // Ctrl+K / Cmd+K enfoca búsqueda (sin romper shortcuts del sistema)
-        const isK = (e.key || '').toLowerCase() === 'k';
+        const isK = (e.key || "").toLowerCase() === "k";
         const metaOrCtrl = e.metaKey || e.ctrlKey;
+
         if (metaOrCtrl && isK) {
           e.preventDefault();
           if (search) {
             search.focus();
-            search.select?.();
+            if (typeof search.select === "function") search.select();
           }
         }
       });
 
-      // Click en overlay cierra modal (fallback)
-      if (overlay) overlay.addEventListener('click', tryCloseModal);
-
-      // Si por alguna razón ui.js no engancha el X
-      if (btnCloseX) btnCloseX.addEventListener('click', tryCloseModal);
+      if (overlay) overlay.addEventListener("click", tryCloseModal);
+      if (btnCloseX) btnCloseX.addEventListener("click", tryCloseModal);
     })();
   </script>
 </body>
