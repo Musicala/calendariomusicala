@@ -1,19 +1,114 @@
 /* =============================================================================
-  js/constants.js — Constantes globales del Calendario Musicala
+  js/constants.js — Constantes globales del Calendario Musicala — vPRO∞+
+  -----------------------------------------------------------------------------
   - Categorías (con override editable)
   - Estados
   - Textos base
+  - Responsables editables
+  - Sanitización y persistencia robusta en localStorage
 ============================================================================= */
 
 /* =========================
-   Categorías del calendario
-   - DEFAULT_CATEGORIES: lo que viene “de fábrica”
-   - getCategories(): permite override desde localStorage
-   - setCategories(): guarda override
+   Storage keys
 ========================= */
+const CATEGORIES_STORAGE_KEY = "musicala.calendar.categories.v2";
+const ASSIGNEES_STORAGE_KEY = "musicala.calendar.assignees.v2";
 
-const CATEGORIES_STORAGE_KEY = "musicala.calendar.categories.v1";
+/* =========================
+   Helpers base
+========================= */
+function clone(obj) {
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch (_) {
+    return obj;
+  }
+}
 
+function safeParseJSON(raw, fallback = null) {
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function safeGetStorage(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+
+function safeSetStorage(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function safeRemoveStorage(key) {
+  try {
+    localStorage.removeItem(key);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function safeSlug(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+}
+
+function isValidHexColor(value) {
+  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value || "").trim());
+}
+
+function normalizeHexColor(value, fallback = "#64748B") {
+  const raw = String(value || "").trim();
+  if (!isValidHexColor(raw)) return fallback;
+
+  if (raw.length === 4) {
+    const r = raw[1];
+    const g = raw[2];
+    const b = raw[3];
+    return `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+  }
+
+  return raw.toUpperCase();
+}
+
+function uniqBy(list, getKey) {
+  const out = [];
+  const seen = new Set();
+
+  for (const item of list || []) {
+    const key = getKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+
+  return out;
+}
+
+function ensureArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/* =========================
+   Categorías del calendario
+========================= */
 export const DEFAULT_CATEGORIES = [
   { id: "administrativo", label: "Administrativo", color: "#4F46E5" },
   { id: "financiero", label: "Financiero", color: "#F59E0B" },
@@ -23,71 +118,70 @@ export const DEFAULT_CATEGORIES = [
   { id: "eventos", label: "Eventos", color: "#A855F7" },
   { id: "cumpleanos", label: "Cumpleaños", color: "#EC4899" },
   { id: "marketing", label: "Marketing y publicidad", color: "#8B5CF6" },
-  // fallback universal, por si el mundo se quema
   { id: "otro", label: "Otro", color: "#64748B" }
 ];
 
-function safeSlug(s) {
-  return String(s || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 32);
-}
+const FALLBACK_CATEGORY = DEFAULT_CATEGORIES.find(c => c.id === "otro") || {
+  id: "otro",
+  label: "Otro",
+  color: "#64748B"
+};
 
 function sanitizeCategory(raw) {
   if (!raw || typeof raw !== "object") return null;
-  const id = safeSlug(raw.id || raw.label);
-  const label = String(raw.label || "").trim();
-  const color = String(raw.color || "#64748B").trim();
-  if (!id || !label) return null;
+
+  const label = String(raw.label || "").trim().slice(0, 80);
+  const idSource = raw.id || label;
+  let id = safeSlug(idSource);
+
+  if (!label) return null;
+  if (!id) id = safeSlug(label);
+  if (!id) return null;
+
+  // "otro" es reservado, pero si realmente viene esa categoría, la respetamos
+  const color = normalizeHexColor(raw.color, "#64748B");
+
   return { id, label, color };
 }
 
-function uniqById(list) {
-  const out = [];
-  const seen = new Set();
-  for (const it of list || []) {
-    if (!it?.id) continue;
-    if (seen.has(it.id)) continue;
-    seen.add(it.id);
-    out.push(it);
+function normalizeCategoriesList(list) {
+  const sanitized = ensureArray(list)
+    .map(sanitizeCategory)
+    .filter(Boolean);
+
+  let cleaned = uniqBy(sanitized, item => item.id);
+
+  if (!cleaned.some(c => c.id === "otro")) {
+    cleaned = [...cleaned, clone(FALLBACK_CATEGORY)];
   }
-  return out;
+
+  if (!cleaned.length) {
+    return clone(DEFAULT_CATEGORIES);
+  }
+
+  return cleaned;
 }
 
 export function getCategories() {
-  try {
-    const raw = localStorage.getItem(CATEGORIES_STORAGE_KEY);
-    if (!raw) return [...DEFAULT_CATEGORIES];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [...DEFAULT_CATEGORIES];
+  const raw = safeGetStorage(CATEGORIES_STORAGE_KEY);
+  if (!raw) return clone(DEFAULT_CATEGORIES);
 
-    const cleaned = uniqById(parsed.map(sanitizeCategory).filter(Boolean));
-    // Garantiza que exista "otro"
-    const hasOtro = cleaned.some(c => c.id === "otro");
-    const final = hasOtro ? cleaned : [...cleaned, DEFAULT_CATEGORIES.find(c => c.id === "otro")];
-    return final.length ? final : [...DEFAULT_CATEGORIES];
-  } catch (_) {
-    return [...DEFAULT_CATEGORIES];
-  }
+  const parsed = safeParseJSON(raw, null);
+  if (!Array.isArray(parsed)) return clone(DEFAULT_CATEGORIES);
+
+  const final = normalizeCategoriesList(parsed);
+  return final.length ? final : clone(DEFAULT_CATEGORIES);
 }
 
 export function setCategories(categories) {
-  const cleaned = uniqById((categories || []).map(sanitizeCategory).filter(Boolean));
-  const hasOtro = cleaned.some(c => c.id === "otro");
-  const final = hasOtro ? cleaned : [...cleaned, DEFAULT_CATEGORIES.find(c => c.id === "otro")];
-
-  localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(final));
+  const final = normalizeCategoriesList(categories);
+  safeSetStorage(CATEGORIES_STORAGE_KEY, JSON.stringify(final));
   return final;
 }
 
 export function resetCategories() {
-  localStorage.removeItem(CATEGORIES_STORAGE_KEY);
-  return [...DEFAULT_CATEGORIES];
+  safeRemoveStorage(CATEGORIES_STORAGE_KEY);
+  return clone(DEFAULT_CATEGORIES);
 }
 
 /* Compat: algunos módulos viejos importan CATEGORIES */
@@ -106,9 +200,9 @@ export const EVENT_STATUS = [
    Colores por estado
 ========================= */
 export const STATUS_COLORS = {
-  pending: "#F59E0B",    // amarillo
-  done: "#22C55E",       // verde
-  cancelled: "#94A3B8"   // gris
+  pending: "#F59E0B",
+  done: "#22C55E",
+  cancelled: "#94A3B8"
 };
 
 /* =========================
@@ -130,6 +224,9 @@ export const CALENDAR_CONFIG = {
   locale: "es-CO"
 };
 
+/* =========================
+   Responsables base
+========================= */
 export const ASSIGNEES = [
   "Alek Caballero",
   "Catalina Medina",
@@ -141,57 +238,40 @@ export const ASSIGNEES = [
   "Angie Nitola"
 ];
 
-/* =========================
-   Responsables editables
-   - DEFAULT_ASSIGNEES: lista "de fábrica"
-   - getAssignees(): permite override desde localStorage
-   - setAssignees(): guarda override
-========================= */
-
-const ASSIGNEES_STORAGE_KEY = "musicala.calendar.assignees.v1";
-
 export const DEFAULT_ASSIGNEES = [...ASSIGNEES];
 
 function sanitizeAssignee(raw) {
-  const name = String(raw || "").trim();
+  const name = String(raw || "").trim().replace(/\s+/g, " ").slice(0, 80);
   if (!name) return null;
-  return name.slice(0, 64);
+  return name;
 }
 
-function uniqNames(list) {
-  const out = [];
-  const seen = new Set();
-  for (const it of list || []) {
-    const name = sanitizeAssignee(it);
-    if (!name) continue;
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(name);
-  }
-  return out;
+function normalizeAssigneesList(list) {
+  const sanitized = ensureArray(list)
+    .map(sanitizeAssignee)
+    .filter(Boolean);
+
+  const cleaned = uniqBy(sanitized, name => name.toLowerCase());
+  return cleaned.length ? cleaned : [...DEFAULT_ASSIGNEES];
 }
 
 export function getAssignees() {
-  try {
-    const raw = localStorage.getItem(ASSIGNEES_STORAGE_KEY);
-    if (!raw) return [...DEFAULT_ASSIGNEES];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [...DEFAULT_ASSIGNEES];
-    const cleaned = uniqNames(parsed);
-    return cleaned.length ? cleaned : [...DEFAULT_ASSIGNEES];
-  } catch (_e) {
-    return [...DEFAULT_ASSIGNEES];
-  }
+  const raw = safeGetStorage(ASSIGNEES_STORAGE_KEY);
+  if (!raw) return [...DEFAULT_ASSIGNEES];
+
+  const parsed = safeParseJSON(raw, null);
+  if (!Array.isArray(parsed)) return [...DEFAULT_ASSIGNEES];
+
+  return normalizeAssigneesList(parsed);
 }
 
 export function setAssignees(names) {
-  const cleaned = uniqNames(names);
-  localStorage.setItem(ASSIGNEES_STORAGE_KEY, JSON.stringify(cleaned));
-  return cleaned;
+  const final = normalizeAssigneesList(names);
+  safeSetStorage(ASSIGNEES_STORAGE_KEY, JSON.stringify(final));
+  return final;
 }
 
 export function resetAssignees() {
-  localStorage.removeItem(ASSIGNEES_STORAGE_KEY);
+  safeRemoveStorage(ASSIGNEES_STORAGE_KEY);
   return [...DEFAULT_ASSIGNEES];
 }

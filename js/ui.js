@@ -1,21 +1,32 @@
 /* =============================================================================
-  js/ui.js — UI del calendario (render + modal + filtros) — vPRO∞ (RECURRENCE PRO+)
+  js/ui.js — UI del calendario (render + modal + filtros) — vPRO∞+
   -----------------------------------------------------------------------------
+  Mejoras:
   - Render grilla mensual (6x7)
   - Chips de eventos por día (compact + @asignado)
-  - ✅ Quick toggle done/pending (accesible) *solo si hay permisos de escritura*
+  - Quick toggle done/pending (accesible) solo si hay permisos de escritura
   - Modal crear/editar (Asignado a + Repetición PRO)
   - Filtros: categoría, estado, persona
   - Búsqueda: título, notas, persona (con debounce)
   - Vistas: Mes / Lista
-  - ✅ Overview: Hoy + Próximos 7 compacto
-  - ✅ Recurrentes PRO:
-      recurrence: null | { type:"interval", unit:"day|week|month|year", interval:number }
+  - Overview: Hoy + Próximos 7 compacto
+  - Recurrentes PRO:
+      recurrence:
+        null
+        | { type:"interval", unit:"day|week|month|year", interval:number }
+        | { type:"interval", unit:"month", interval:number, mode:"dayOfMonth", dayOfMonth:number }
     Backward compatible: "" | "weekly" | "monthly" | "yearly"
-  - ✅ Recurrence UI PRO+ (limpia, con resumen, toggle y “cada X” ordenado)
-
-  RBAC / Readonly:
-  - ui escucha auth:changed (opcional) y deshabilita acciones si canWrite=false
+  - Recurrence UI PRO+:
+      * Presets
+      * Toggle “Repetir”
+      * Cada X unidad
+      * Para mes: mismo día / día fijo del mes
+  - Categorías:
+      * Guardado robusto con slug id
+      * Evita duplicados por id
+      * Mantiene “otro”
+  - RBAC / Readonly:
+      * ui escucha auth:changed (opcional) y deshabilita acciones si canWrite=false
 ============================================================================= */
 
 import {
@@ -125,7 +136,10 @@ let UI_STATE = {
   onNavigate: null,
   onCreate: null,
   onUpdate: null,
-  onDelete: null
+  onDelete: null,
+
+  _initialized: false,
+  _globalKeysBound: false
 };
 
 /* =========================
@@ -153,26 +167,23 @@ function statusLabel(id) {
 function applyPermissionGates() {
   const can = !!UI_STATE.canWrite;
 
-  // Botón nuevo evento
   if ($btnNewEvent) {
     $btnNewEvent.classList.toggle("disabled", !can);
     $btnNewEvent.setAttribute("aria-disabled", can ? "false" : "true");
   }
 
-  // Botón eliminar en modal (solo se muestra al editar, pero si no hay write nunca debe verse)
   if ($btnDeleteEvent) {
     $btnDeleteEvent.classList.toggle("disabled", !can);
     $btnDeleteEvent.setAttribute("aria-disabled", can ? "false" : "true");
   }
 
-  // Deshabilitar submit del form (sin romper inputs)
   if ($eventForm) {
     $eventForm.classList.toggle("readonly", !can);
   }
 }
 
 /* =========================
-   Recurrence PRO helpers
+   Recurrence helpers
 ========================= */
 function normTextLocal(v) {
   return String(v ?? "").trim().toLowerCase();
@@ -201,7 +212,19 @@ function normalizeRecurrence(raw) {
     if (!["day","week","month","year"].includes(unit)) return null;
     if (!Number.isFinite(interval) || interval < 1 || interval > 100) return null;
 
-    return { type: "interval", unit, interval };
+    const normalized = { type: "interval", unit, interval };
+
+    if (unit === "month") {
+      const mode = normTextLocal(raw.mode || raw.monthMode || "");
+      const dayOfMonth = parseInt(raw.dayOfMonth ?? raw.day ?? "", 10);
+
+      if (mode === "dayofmonth" && Number.isFinite(dayOfMonth) && dayOfMonth >= 1 && dayOfMonth <= 31) {
+        normalized.mode = "dayOfMonth";
+        normalized.dayOfMonth = dayOfMonth;
+      }
+    }
+
+    return normalized;
   }
 
   return null;
@@ -210,7 +233,13 @@ function normalizeRecurrence(raw) {
 function recurrenceToSelectValue(rec) {
   const r = normalizeRecurrence(rec);
   if (!r) return "";
-  return JSON.stringify({ unit: r.unit, interval: r.interval });
+
+  const payload = { unit: r.unit, interval: r.interval };
+  if (r.unit === "month" && r.mode === "dayOfMonth" && Number.isFinite(r.dayOfMonth)) {
+    payload.mode = "dayOfMonth";
+    payload.dayOfMonth = r.dayOfMonth;
+  }
+  return JSON.stringify(payload);
 }
 
 function parseRecurrenceFromControlValue(value) {
@@ -240,11 +269,25 @@ function recurrenceLabel(rec) {
   };
 
   if (unit === "week"  && interval === 1) return "Semanal";
+  if (unit === "month" && interval === 1 && r.mode === "dayOfMonth" && Number.isFinite(r.dayOfMonth)) {
+    return `Cada mes el día ${r.dayOfMonth}`;
+  }
   if (unit === "month" && interval === 1) return "Mensual";
   if (unit === "month" && interval === 6) return "Semestral";
   if (unit === "year"  && interval === 1) return "Anual";
 
+  if (unit === "month" && r.mode === "dayOfMonth" && Number.isFinite(r.dayOfMonth)) {
+    return `Cada ${interval} meses el día ${r.dayOfMonth}`;
+  }
+
   return `Cada ${interval} ${unitLabel(unit, interval)}`;
+}
+
+function getEventDateDayOfMonth() {
+  const iso = String($eventDate?.value || "").trim();
+  if (!iso) return 1;
+  const d = isoToDate(iso);
+  return Math.max(1, Math.min(31, d.getDate()));
 }
 
 /* =========================
@@ -271,253 +314,239 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
   populateAssignedSelect([]);
   populateAssignedToModal([]);
 
-  // Toolbar
-  $btnPrevMonth?.addEventListener("click", () => shiftMonth(-1));
-  $btnNextMonth?.addEventListener("click", () => shiftMonth(+1));
-  $btnToday?.addEventListener("click", () => goToday());
+  if (!UI_STATE._initialized) {
+    $btnPrevMonth?.addEventListener("click", () => shiftMonth(-1));
+    $btnNextMonth?.addEventListener("click", () => shiftMonth(+1));
+    $btnToday?.addEventListener("click", () => goToday());
 
-  $btnNewEvent?.addEventListener("click", () => {
-    if (!UI_STATE.canWrite) {
-      notify("Modo solo lectura: no puedes crear eventos.", { mode: "toast" });
-      return;
-    }
-    openModalForNew(getSmartDefaultDateISO());
-  });
+    $btnNewEvent?.addEventListener("click", () => {
+      if (!UI_STATE.canWrite) {
+        notify("Modo solo lectura: no puedes crear eventos.", { mode: "toast" });
+        return;
+      }
+      openModalForNew(getSmartDefaultDateISO());
+    });
 
-  // Vista Mes/Lista
-  $btnViewMonth?.addEventListener("click", () => setView("month"));
-  $btnViewList?.addEventListener("click", () => setView("list"));
+    $btnViewMonth?.addEventListener("click", () => setView("month"));
+    $btnViewList?.addEventListener("click", () => setView("list"));
 
-  // Search (debounced)
-  const onSearch = debounce(() => {
-    UI_STATE.searchQuery = ($searchEvents?.value || "").trim();
-    rerender();
-  }, SEARCH_DEBOUNCE_MS);
+    const onSearch = debounce(() => {
+      UI_STATE.searchQuery = ($searchEvents?.value || "").trim();
+      rerender();
+    }, SEARCH_DEBOUNCE_MS);
 
-  $searchEvents?.addEventListener("input", onSearch);
+    $searchEvents?.addEventListener("input", onSearch);
 
-  // Filters
-  $filterCategory?.addEventListener("change", () => {
-    UI_STATE.filterCategory = $filterCategory.value || "";
-    rerender();
-  });
-  $filterStatus?.addEventListener("change", () => {
-    UI_STATE.filterStatus = $filterStatus.value || "";
-    rerender();
-  });
-  $filterAssignedTo?.addEventListener("change", () => {
-    UI_STATE.filterAssignedTo = $filterAssignedTo.value || "";
-    rerender();
-  });
+    $filterCategory?.addEventListener("change", () => {
+      UI_STATE.filterCategory = $filterCategory.value || "";
+      rerender();
+    });
+    $filterStatus?.addEventListener("change", () => {
+      UI_STATE.filterStatus = $filterStatus.value || "";
+      rerender();
+    });
+    $filterAssignedTo?.addEventListener("change", () => {
+      UI_STATE.filterAssignedTo = $filterAssignedTo.value || "";
+      rerender();
+    });
 
-  // Modal close
-  $btnCancelModal?.addEventListener("click", closeModal);
-  $modalOverlay?.addEventListener("click", closeModal);
+    $btnCancelModal?.addEventListener("click", closeModal);
+    $modalOverlay?.addEventListener("click", closeModal);
 
-  document.addEventListener("keydown", (e) => {
-    const modalOpen = !$eventModal?.classList.contains("hidden");
-    const tag = (e.target?.tagName || "").toLowerCase();
-    const typing = ["input","textarea","select"].includes(tag) || e.target?.isContentEditable;
-
-    if (e.key === "Escape" && modalOpen) {
+    $btnDeleteEvent?.addEventListener("click", (e) => {
       e.preventDefault();
+      if (!UI_STATE.canWrite) {
+        notify("Modo solo lectura: no puedes eliminar.", { mode: "toast" });
+        return;
+      }
+      const id = UI_STATE.editingId;
+      if (!id) return;
+      UI_STATE.onDelete?.(id);
       closeModal();
-      return;
-    }
+    });
 
-    // Ctrl/Cmd + Enter => guardar (si puede)
-    if (modalOpen && (e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    $eventForm?.addEventListener("submit", (e) => {
       e.preventDefault();
+
       if (!UI_STATE.canWrite) {
-        notify("Modo solo lectura: no puedes guardar cambios.", { mode: "toast" });
+        notify("Modo solo lectura: no puedes guardar.", { mode: "toast" });
         return;
       }
-      $eventForm?.requestSubmit?.();
-      return;
-    }
 
-    // Ctrl/Cmd + K => enfocar búsqueda
-    if (!typing && (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "k")) {
-      e.preventDefault();
-      ($searchEvents || $filterCategory || $filterStatus)?.focus?.();
-      return;
-    }
-  });
+      const payload = readModalPayload();
+      if (!payload) return;
 
-  // Delete
-  $btnDeleteEvent?.addEventListener("click", (e) => {
-    e.preventDefault();
-    if (!UI_STATE.canWrite) {
-      notify("Modo solo lectura: no puedes eliminar.", { mode: "toast" });
-      return;
-    }
-    const id = UI_STATE.editingId;
-    if (!id) return;
-    UI_STATE.onDelete?.(id);
-    closeModal();
-  });
+      if (UI_STATE.editingId) UI_STATE.onUpdate?.(UI_STATE.editingId, payload);
+      else UI_STATE.onCreate?.(payload);
 
-  // Submit
-  $eventForm?.addEventListener("submit", (e) => {
-    e.preventDefault();
+      closeModal();
+    });
 
-    if (!UI_STATE.canWrite) {
-      notify("Modo solo lectura: no puedes guardar.", { mode: "toast" });
-      return;
-    }
-
-    const payload = readModalPayload();
-    if (!payload) return;
-
-    if (UI_STATE.editingId) UI_STATE.onUpdate?.(UI_STATE.editingId, payload);
-    else UI_STATE.onCreate?.(payload);
-
-    closeModal();
-  });
-
-  // =========================
-  // Delegación clicks calendario
-  // =========================
-  $calendarGrid?.addEventListener("click", (e) => {
-    // 1) Quick toggle
-    const check = e.target.closest("[data-quick-toggle]");
-    if (check) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!UI_STATE.canWrite) {
-        notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-        return;
-      }
-      const id = check.getAttribute("data-quick-toggle");
-      quickToggleDone(id);
-      return;
-    }
-
-    // click chip => editar / virtual => nuevo prefill
-    const chip = e.target.closest("[data-event-id]");
-    if (chip) {
-      const id = chip.getAttribute("data-event-id");
-      const ev = UI_STATE.events.find(x => x.id === id);
-      if (ev && ev._virtualFromId) {
+    $calendarGrid?.addEventListener("click", (e) => {
+      const check = e.target.closest("[data-quick-toggle]");
+      if (check) {
+        e.preventDefault();
+        e.stopPropagation();
         if (!UI_STATE.canWrite) {
-          notify("Modo solo lectura: no puedes crear desde una ocurrencia.", { mode: "toast" });
+          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
+          return;
+        }
+        const id = check.getAttribute("data-quick-toggle");
+        quickToggleDone(id);
+        return;
+      }
+
+      const chip = e.target.closest("[data-event-id]");
+      if (chip) {
+        const id = chip.getAttribute("data-event-id");
+        const ev = UI_STATE.events.find(x => x.id === id);
+        if (ev && ev._virtualFromId) {
+          if (!UI_STATE.canWrite) {
+            notify("Modo solo lectura: no puedes crear desde una ocurrencia.", { mode: "toast" });
+            return;
+          }
+          openModalForNew(ev.dateISO, ev);
+          return;
+        }
+        if (ev) openModalForEdit(ev);
+        return;
+      }
+
+      const dayCell = e.target.closest("[data-date]");
+      if (dayCell) {
+        if (!UI_STATE.canWrite) {
+          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
+          return;
+        }
+        const dateISO = dayCell.getAttribute("data-date");
+        openModalForNew(dateISO);
+      }
+    });
+
+    $listBody?.addEventListener("click", (e) => {
+      const check = e.target.closest("[data-quick-toggle]");
+      if (check) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!UI_STATE.canWrite) {
+          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
+          return;
+        }
+        const id = check.getAttribute("data-quick-toggle");
+        quickToggleDone(id);
+        return;
+      }
+
+      const row = e.target.closest("[data-event-id]");
+      if (!row) return;
+      const id = row.getAttribute("data-event-id");
+      const ev = UI_STATE.events.find(x => x.id === id);
+      if (!ev) return;
+
+      if (ev._virtualFromId) {
+        if (!UI_STATE.canWrite) {
+          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
           return;
         }
         openModalForNew(ev.dateISO, ev);
-        return;
-      }
-      if (ev) openModalForEdit(ev);
-      return;
-    }
-
-    // click celda día => nuevo en ese día
-    const dayCell = e.target.closest("[data-date]");
-    if (dayCell) {
-      if (!UI_STATE.canWrite) {
-        notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-        return;
-      }
-      const dateISO = dayCell.getAttribute("data-date");
-      openModalForNew(dateISO);
-    }
-  });
-
-  // Quick toggle por teclado
-  document.addEventListener("keydown", (e) => {
-    const t = e.target;
-    if (!t || !(t instanceof HTMLElement)) return;
-    if (!t.matches("[data-quick-toggle]")) return;
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      if (!UI_STATE.canWrite) {
-        notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-        return;
-      }
-      const id = t.getAttribute("data-quick-toggle");
-      quickToggleDone(id);
-    }
-  });
-
-  // Lista: delegación
-  $listBody?.addEventListener("click", (e) => {
-    const check = e.target.closest("[data-quick-toggle]");
-    if (check) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!UI_STATE.canWrite) {
-        notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-        return;
-      }
-      const id = check.getAttribute("data-quick-toggle");
-      quickToggleDone(id);
-      return;
-    }
-
-    const row = e.target.closest("[data-event-id]");
-    if (!row) return;
-    const id = row.getAttribute("data-event-id");
-    const ev = UI_STATE.events.find(x => x.id === id);
-    if (!ev) return;
-
-    if (ev._virtualFromId) {
-      if (!UI_STATE.canWrite) {
-        notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-        return;
-      }
-      openModalForNew(ev.dateISO, ev);
-    } else {
-      openModalForEdit(ev);
-    }
-  });
-
-  // Overview: delegación
-  const ovClick = (e) => {
-    const check = e.target.closest("[data-quick-toggle]");
-    if (check) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!UI_STATE.canWrite) {
-        notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-        return;
-      }
-      const id = check.getAttribute("data-quick-toggle");
-      quickToggleDone(id);
-      return;
-    }
-
-    const btn = e.target.closest("[data-event-id]");
-    if (!btn) return;
-    const id = btn.getAttribute("data-event-id");
-    const ev = UI_STATE.events.find(x => x.id === id);
-    if (!ev) return;
-
-    if (ev._virtualFromId) {
-      if (!UI_STATE.canWrite) {
-        notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-        return;
-      }
-      openModalForNew(ev.dateISO, ev);
-    } else {
-      openModalForEdit(ev);
-    }
-  };
-  $todayList?.addEventListener("click", ovClick);
-  $nextList?.addEventListener("click", ovClick);
-
-  // Optional: escuchar auth:changed para readonly (sin depender de app.js)
-  if (!window.__uiAuthBound) {
-    window.addEventListener("auth:changed", (ev) => {
-      const d = ev?.detail || {};
-      if (typeof d.canWrite === "boolean") {
-        UI_STATE.canWrite = d.canWrite;
-        applyPermissionGates();
-        rerender();
+      } else {
+        openModalForEdit(ev);
       }
     });
-    window.__uiAuthBound = true;
+
+    const ovClick = (e) => {
+      const check = e.target.closest("[data-quick-toggle]");
+      if (check) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!UI_STATE.canWrite) {
+          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
+          return;
+        }
+        const id = check.getAttribute("data-quick-toggle");
+        quickToggleDone(id);
+        return;
+      }
+
+      const btn = e.target.closest("[data-event-id]");
+      if (!btn) return;
+      const id = btn.getAttribute("data-event-id");
+      const ev = UI_STATE.events.find(x => x.id === id);
+      if (!ev) return;
+
+      if (ev._virtualFromId) {
+        if (!UI_STATE.canWrite) {
+          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
+          return;
+        }
+        openModalForNew(ev.dateISO, ev);
+      } else {
+        openModalForEdit(ev);
+      }
+    };
+    $todayList?.addEventListener("click", ovClick);
+    $nextList?.addEventListener("click", ovClick);
+
+    if (!UI_STATE._globalKeysBound) {
+      document.addEventListener("keydown", (e) => {
+        const modalOpen = !$eventModal?.classList.contains("hidden");
+        const tag = (e.target?.tagName || "").toLowerCase();
+        const typing = ["input","textarea","select"].includes(tag) || e.target?.isContentEditable;
+
+        if (e.key === "Escape" && modalOpen) {
+          e.preventDefault();
+          closeModal();
+          return;
+        }
+
+        if (modalOpen && (e.ctrlKey || e.metaKey) && e.key === "Enter") {
+          e.preventDefault();
+          if (!UI_STATE.canWrite) {
+            notify("Modo solo lectura: no puedes guardar cambios.", { mode: "toast" });
+            return;
+          }
+          $eventForm?.requestSubmit?.();
+          return;
+        }
+
+        if (!typing && (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "k")) {
+          e.preventDefault();
+          ($searchEvents || $filterCategory || $filterStatus)?.focus?.();
+          return;
+        }
+
+        const t = e.target;
+        if (!t || !(t instanceof HTMLElement)) return;
+        if (!t.matches("[data-quick-toggle]")) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (!UI_STATE.canWrite) {
+            notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
+            return;
+          }
+          const id = t.getAttribute("data-quick-toggle");
+          quickToggleDone(id);
+        }
+      });
+
+      UI_STATE._globalKeysBound = true;
+    }
+
+    if (!window.__uiAuthBound) {
+      window.addEventListener("auth:changed", (ev) => {
+        const d = ev?.detail || {};
+        if (typeof d.canWrite === "boolean") {
+          UI_STATE.canWrite = d.canWrite;
+          applyPermissionGates();
+          rerender();
+        }
+      });
+      window.__uiAuthBound = true;
+    }
+
+    UI_STATE._initialized = true;
   }
 
-  // default view
   setView("month", { silent: true });
   applyPermissionGates();
   rerender();
@@ -559,7 +588,6 @@ export function getFilters() {
   };
 }
 
-// (opcional) set desde app.js si quieren forzar permisos sin evento auth:changed
 export function setCanWrite(canWrite) {
   UI_STATE.canWrite = !!canWrite;
   applyPermissionGates();
@@ -591,7 +619,6 @@ export function renderCalendar(year, monthIndex, events = []) {
   const gridDays = buildMonthGrid(year, monthIndex, CALENDAR_CONFIG.weekStartsOn);
   const filteredEvents = applyFilters(events);
 
-  // agrupar por dateISO
   const byDay = new Map();
   for (const ev of filteredEvents) {
     const dateISO = ev.dateISO || "";
@@ -600,7 +627,6 @@ export function renderCalendar(year, monthIndex, events = []) {
     byDay.get(dateISO).push(ev);
   }
 
-  // ordenar eventos dentro del día
   for (const arr of byDay.values()) {
     arr.sort((a, b) => {
       const aDone = (a.status === "done") ? 1 : 0;
@@ -619,7 +645,6 @@ export function renderCalendar(year, monthIndex, events = []) {
   if (!$calendarGrid) return;
   $calendarGrid.innerHTML = "";
 
-  // headers
   const headers = buildWeekdayHeaders();
   for (const h of headers) {
     const el = document.createElement("div");
@@ -628,7 +653,6 @@ export function renderCalendar(year, monthIndex, events = []) {
     $calendarGrid.appendChild(el);
   }
 
-  // days
   for (const d of gridDays) {
     const dateISO = toISODateLocal(d);
     const inMonth = isSameMonth(d, year, monthIndex);
@@ -724,7 +748,7 @@ function renderList(year, monthIndex, events = []) {
 }
 
 /* =========================
-   Overview: Hoy + Próximos 7 (compacto)
+   Overview: Hoy + Próximos 7
 ========================= */
 function renderOverview() {
   const todayISO = toISODateLocal(new Date());
@@ -857,7 +881,6 @@ function renderChip(ev) {
 }
 
 function renderQuickToggleHTML(ev, { small = false } = {}) {
-  // No permitir “toggle” en ocurrencias virtuales ni cuando no hay permisos
   if (ev?._virtualFromId) return "";
   if (!UI_STATE.canWrite) return "";
 
@@ -896,11 +919,9 @@ function quickToggleDone(eventId) {
 
   const next = (st === "done") ? "pending" : "done";
 
-  // Optimistic UI
   raw.status = next;
   rerender();
 
-  // Persistencia
   UI_STATE.onUpdate?.(id, { status: next });
 
   notify(next === "done" ? "Hecho ✅" : "Marcado como pendiente ◻️", { mode: "toast", ms: 1400 });
@@ -993,6 +1014,11 @@ function readModalPayload() {
     const n = recurrence.interval;
     if (!["day","week","month","year"].includes(u)) problems.push("Repetición inválida (unidad).");
     if (!Number.isFinite(n) || n < 1 || n > 100) problems.push("Repetición inválida (intervalo).");
+    if (u === "month" && recurrence.mode === "dayOfMonth") {
+      if (!Number.isFinite(recurrence.dayOfMonth) || recurrence.dayOfMonth < 1 || recurrence.dayOfMonth > 31) {
+        problems.push("El día del mes para la repetición es inválido.");
+      }
+    }
   }
 
   if (problems.length) {
@@ -1027,6 +1053,8 @@ let $recUI = {
   toggle: null,
   every: null,
   unit: null,
+  monthlyMode: null,
+  dayOfMonth: null,
   summary: null,
   hint: null
 };
@@ -1043,9 +1071,12 @@ function ensureRecurrenceSectionUI() {
     $recUI.toggle = existing.querySelector("#recProToggle");
     $recUI.every = existing.querySelector("#recProEvery");
     $recUI.unit = existing.querySelector("#recProUnit");
+    $recUI.monthlyMode = existing.querySelector("#recProMonthlyMode");
+    $recUI.dayOfMonth = existing.querySelector("#recProDayOfMonth");
     $recUI.summary = existing.querySelector("#recProSummary");
     $recUI.hint = existing.querySelector("#recProHint");
     bindRecurrenceUIOnce();
+    updateRecurrenceSummary();
     return;
   }
 
@@ -1068,7 +1099,7 @@ function ensureRecurrenceSectionUI() {
         <div class="recurrence-pro-field">
           <div class="recurrence-pro-label">Preset</div>
           <div class="recurrence-pro-control" data-rec-pro-anchor></div>
-          <div class="recurrence-pro-help muted">Ej: “Mensual” repite el mismo día cada mes.</div>
+          <div class="recurrence-pro-help muted">Puedes usar un preset o personalizar abajo.</div>
         </div>
       </div>
 
@@ -1089,6 +1120,22 @@ function ensureRecurrenceSectionUI() {
               <option value="year">Año(s)</option>
             </select>
           </div>
+
+          <div class="recurrence-pro-month hidden" id="recProMonthConfig">
+            <label class="recurrence-pro-inline">
+              <span class="muted">En mes:</span>
+              <select id="recProMonthlyMode">
+                <option value="sameDate">Mismo día del evento</option>
+                <option value="dayOfMonth">Día fijo del mes</option>
+              </select>
+            </label>
+
+            <label class="recurrence-pro-inline hidden" id="recProDayWrap">
+              <span class="muted">Día</span>
+              <input id="recProDayOfMonth" type="number" min="1" max="31" value="1" inputmode="numeric" />
+            </label>
+          </div>
+
           <div class="recurrence-pro-hint muted" id="recProHint"></div>
         </div>
 
@@ -1107,6 +1154,8 @@ function ensureRecurrenceSectionUI() {
   $recUI.toggle = wrap.querySelector("#recProToggle");
   $recUI.every = wrap.querySelector("#recProEvery");
   $recUI.unit = wrap.querySelector("#recProUnit");
+  $recUI.monthlyMode = wrap.querySelector("#recProMonthlyMode");
+  $recUI.dayOfMonth = wrap.querySelector("#recProDayOfMonth");
   $recUI.summary = wrap.querySelector("#recProSummary");
   $recUI.hint = wrap.querySelector("#recProHint");
 
@@ -1119,6 +1168,28 @@ function bindRecurrenceUIOnce() {
   $recUI.wrap._bound = true;
 
   const $controls = $recUI.wrap.querySelector("#recProControls");
+  const $monthCfg = $recUI.wrap.querySelector("#recProMonthConfig");
+  const $dayWrap = $recUI.wrap.querySelector("#recProDayWrap");
+
+  const syncMonthUI = () => {
+    const isMonth = ($recUI.unit?.value || "") === "month";
+    $monthCfg?.classList.toggle("hidden", !isMonth);
+
+    const mode = $recUI.monthlyMode?.value || "sameDate";
+    const showDay = isMonth && mode === "dayOfMonth";
+    $dayWrap?.classList.toggle("hidden", !showDay);
+
+    if (showDay && $recUI.dayOfMonth && (!$recUI.dayOfMonth.value || $recUI.dayOfMonth.value === "1")) {
+      $recUI.dayOfMonth.value = String(getEventDateDayOfMonth());
+    }
+  };
+
+  const updateFromAdvanced = () => {
+    if (!$recUI.toggle?.checked) return;
+    syncMonthUI();
+    setRecurrenceControlsValue(readAdvancedRecurrence());
+    updateRecurrenceSummary();
+  };
 
   const onToggle = () => {
     const on = !!$recUI.toggle?.checked;
@@ -1127,24 +1198,29 @@ function bindRecurrenceUIOnce() {
     if (!on) {
       setRecurrenceControlsValue(null);
     } else {
-      const unit = $recUI.unit?.value || "week";
-      const n = clampInt($recUI.every?.value, 1, 100, 1);
-      setRecurrenceControlsValue({ unit, interval: n });
+      syncMonthUI();
+      setRecurrenceControlsValue(readAdvancedRecurrence() || { unit: "week", interval: 1 });
     }
     updateRecurrenceSummary();
   };
 
-  const onEveryUnit = () => {
-    if (!$recUI.toggle?.checked) return;
-    const unit = $recUI.unit?.value || "week";
-    const n = clampInt($recUI.every?.value, 1, 100, 1);
-    setRecurrenceControlsValue({ unit, interval: n });
-    updateRecurrenceSummary();
-  };
-
   $recUI.toggle?.addEventListener("change", onToggle);
-  $recUI.every?.addEventListener("input", onEveryUnit);
-  $recUI.unit?.addEventListener("change", onEveryUnit);
+  $recUI.every?.addEventListener("input", updateFromAdvanced);
+  $recUI.unit?.addEventListener("change", updateFromAdvanced);
+  $recUI.monthlyMode?.addEventListener("change", updateFromAdvanced);
+  $recUI.dayOfMonth?.addEventListener("input", updateFromAdvanced);
+
+  if ($eventDate && !$eventDate._recDateBound) {
+    $eventDate.addEventListener("change", () => {
+      if (($recUI.unit?.value || "") === "month" && ($recUI.monthlyMode?.value || "") === "dayOfMonth" && $recUI.dayOfMonth) {
+        if (!$recUI.dayOfMonth.value || Number($recUI.dayOfMonth.value) < 1) {
+          $recUI.dayOfMonth.value = String(getEventDateDayOfMonth());
+        }
+      }
+      updateRecurrenceSummary();
+    });
+    $eventDate._recDateBound = true;
+  }
 
   if ($eventRecurrence && !$eventRecurrence._recBound) {
     $eventRecurrence.addEventListener("change", () => {
@@ -1154,6 +1230,25 @@ function bindRecurrenceUIOnce() {
     });
     $eventRecurrence._recBound = true;
   }
+
+  syncMonthUI();
+}
+
+function readAdvancedRecurrence() {
+  if (!($recUI.toggle && $recUI.every && $recUI.unit && $recUI.toggle.checked)) return null;
+
+  const interval = clampInt($recUI.every.value, 1, 100, 1);
+  const unit = String($recUI.unit.value || "week").trim();
+
+  if (unit === "month") {
+    const monthlyMode = String($recUI.monthlyMode?.value || "sameDate").trim();
+    if (monthlyMode === "dayOfMonth") {
+      const dayOfMonth = clampInt($recUI.dayOfMonth?.value, 1, 31, getEventDateDayOfMonth());
+      return normalizeRecurrence({ unit, interval, mode: "dayOfMonth", dayOfMonth });
+    }
+  }
+
+  return normalizeRecurrence({ unit, interval });
 }
 
 function updateRecurrenceSummary() {
@@ -1171,6 +1266,18 @@ function updateRecurrenceSummary() {
 
   $recUI.summary.textContent = `Se repetirá: ${label}`;
   $recUI.summary.classList.add("on");
+
+  if (rec.unit === "month" && rec.mode === "dayOfMonth" && Number.isFinite(rec.dayOfMonth)) {
+    $recUI.hint.textContent = `→ Se intentará crear cada ${rec.interval === 1 ? "mes" : `${rec.interval} meses`} el día ${rec.dayOfMonth}.`;
+    return;
+  }
+
+  if (rec.unit === "month") {
+    const sourceDay = getEventDateDayOfMonth();
+    $recUI.hint.textContent = `→ Mantendrá la referencia del día ${sourceDay} del evento original cuando sea posible.`;
+    return;
+  }
+
   $recUI.hint.textContent = label ? `→ ${label}` : "";
 }
 
@@ -1189,6 +1296,7 @@ function populateRecurrenceSelect() {
     { value: JSON.stringify({ unit: "week", interval: 2 }),  label: "Cada 2 semanas" },
     { value: JSON.stringify({ unit: "week", interval: 3 }),  label: "Cada 3 semanas" },
     { value: JSON.stringify({ unit: "month", interval: 1 }), label: "Mensual" },
+    { value: JSON.stringify({ unit: "month", interval: 1, mode: "dayOfMonth", dayOfMonth: getEventDateDayOfMonth() }), label: "Cada mes el día actual" },
     { value: JSON.stringify({ unit: "month", interval: 2 }), label: "Cada 2 meses" },
     { value: JSON.stringify({ unit: "month", interval: 3 }), label: "Cada 3 meses" },
     { value: JSON.stringify({ unit: "month", interval: 6 }), label: "Semestral" },
@@ -1229,12 +1337,18 @@ function syncAdvancedRecUI(rec) {
 
   if (!$recUI.wrap || !$recUI.toggle || !$recUI.every || !$recUI.unit) return;
   const $controls = $recUI.wrap.querySelector("#recProControls");
+  const $monthCfg = $recUI.wrap.querySelector("#recProMonthConfig");
+  const $dayWrap = $recUI.wrap.querySelector("#recProDayWrap");
 
   if (!r) {
     $recUI.toggle.checked = false;
     $controls?.classList.add("hidden");
+    $monthCfg?.classList.add("hidden");
+    $dayWrap?.classList.add("hidden");
     $recUI.every.value = "1";
     $recUI.unit.value = "week";
+    if ($recUI.monthlyMode) $recUI.monthlyMode.value = "sameDate";
+    if ($recUI.dayOfMonth) $recUI.dayOfMonth.value = String(getEventDateDayOfMonth());
     return;
   }
 
@@ -1242,14 +1356,24 @@ function syncAdvancedRecUI(rec) {
   $controls?.classList.remove("hidden");
   $recUI.every.value = String(r.interval || 1);
   $recUI.unit.value = r.unit || "week";
+
+  const isMonth = r.unit === "month";
+  $monthCfg?.classList.toggle("hidden", !isMonth);
+
+  if (isMonth && r.mode === "dayOfMonth" && Number.isFinite(r.dayOfMonth)) {
+    if ($recUI.monthlyMode) $recUI.monthlyMode.value = "dayOfMonth";
+    if ($recUI.dayOfMonth) $recUI.dayOfMonth.value = String(r.dayOfMonth);
+    $dayWrap?.classList.remove("hidden");
+  } else {
+    if ($recUI.monthlyMode) $recUI.monthlyMode.value = "sameDate";
+    if ($recUI.dayOfMonth) $recUI.dayOfMonth.value = String(getEventDateDayOfMonth());
+    $dayWrap?.classList.add("hidden");
+  }
 }
 
 function readRecurrenceFromModal() {
-  if ($recUI.toggle && $recUI.every && $recUI.unit && $recUI.toggle.checked) {
-    const interval = clampInt($recUI.every.value, 1, 100, 1);
-    const unit = String($recUI.unit.value || "week").trim();
-    return normalizeRecurrence({ unit, interval });
-  }
+  const advanced = readAdvancedRecurrence();
+  if (advanced) return advanced;
 
   if ($eventRecurrence) {
     const v = String($eventRecurrence.value || "").trim();
@@ -1504,6 +1628,7 @@ function applyFilters(events) {
 function populateCategorySelects() {
   if ($filterCategory) {
     const keep = $filterCategory.querySelector("option[value='']");
+    const prev = $filterCategory.value || "";
     $filterCategory.innerHTML = "";
     if (keep) $filterCategory.appendChild(keep);
 
@@ -1513,9 +1638,14 @@ function populateCategorySelects() {
       opt.textContent = c.label;
       $filterCategory.appendChild(opt);
     }
+
+    if (prev && Array.from($filterCategory.options).some(o => o.value === prev)) {
+      $filterCategory.value = prev;
+    }
   }
 
   if ($eventCategory) {
+    const prev = $eventCategory.value || "";
     $eventCategory.innerHTML = "";
     for (const c of (UI_STATE.categories || getCategories())) {
       const opt = document.createElement("option");
@@ -1523,17 +1653,24 @@ function populateCategorySelects() {
       opt.textContent = c.label;
       $eventCategory.appendChild(opt);
     }
+    if (prev && Array.from($eventCategory.options).some(o => o.value === prev)) {
+      $eventCategory.value = prev;
+    }
   }
 }
 
 function populateStatusSelects() {
   if ($eventStatus) {
+    const prev = $eventStatus.value || "";
     $eventStatus.innerHTML = "";
     for (const s of EVENT_STATUS) {
       const opt = document.createElement("option");
       opt.value = s.id;
       opt.textContent = s.label;
       $eventStatus.appendChild(opt);
+    }
+    if (prev && Array.from($eventStatus.options).some(o => o.value === prev)) {
+      $eventStatus.value = prev;
     }
   }
 }
@@ -1620,7 +1757,7 @@ function buildWeekdayHeaders() {
 }
 
 /* =========================
-   Recurrentes: expansión en rango visible (PRO)
+   Recurrentes: expansión visible
 ========================= */
 function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
   const events = Array.isArray(rawEvents) ? rawEvents : [];
@@ -1640,7 +1777,7 @@ function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
     const rec = normalizeRecurrence(ev.recurrence);
     if (!rec) continue;
 
-    out.push(...expandInterval(ev, startISO, fromISO, toISO, rec.unit, rec.interval));
+    out.push(...expandInterval(ev, startISO, fromISO, toISO, rec));
   }
 
   const seen = new Set();
@@ -1655,7 +1792,7 @@ function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
   return cleaned;
 }
 
-function expandInterval(ev, startISO, fromISO, toISO, unit, interval) {
+function expandInterval(ev, startISO, fromISO, toISO, rec) {
   const res = [];
 
   const startD = isoToDate(startISO);
@@ -1666,7 +1803,7 @@ function expandInterval(ev, startISO, fromISO, toISO, unit, interval) {
 
   let guard = 0;
   while (cur < fromD && guard < 5000) {
-    cur = addByUnit(cur, unit, interval, startD);
+    cur = addByRecurrence(cur, rec, startD);
     guard++;
   }
 
@@ -1674,16 +1811,17 @@ function expandInterval(ev, startISO, fromISO, toISO, unit, interval) {
   while (cur <= toD && guard < 5000) {
     const iso = toISODateLocal(cur);
     if (iso !== startISO) res.push(makeVirtualOccurrence(ev, iso));
-    cur = addByUnit(cur, unit, interval, startD);
+    cur = addByRecurrence(cur, rec, startD);
     guard++;
   }
 
   return res;
 }
 
-function addByUnit(date, unit, interval, anchorStartDate) {
+function addByRecurrence(date, rec, anchorStartDate) {
   const d = new Date(date);
-  const n = Number(interval || 1);
+  const unit = rec?.unit || "week";
+  const n = Number(rec?.interval || 1);
 
   if (unit === "day") {
     d.setDate(d.getDate() + n);
@@ -1695,12 +1833,18 @@ function addByUnit(date, unit, interval, anchorStartDate) {
     return d;
   }
 
-  const targetDay = (anchorStartDate instanceof Date) ? anchorStartDate.getDate() : d.getDate();
+  const anchorDay = (anchorStartDate instanceof Date) ? anchorStartDate.getDate() : d.getDate();
 
   if (unit === "month") {
     const y = d.getFullYear();
     const m = d.getMonth() + n;
     const base = new Date(y, m, 1, 0,0,0,0);
+
+    let targetDay = anchorDay;
+    if (rec?.mode === "dayOfMonth" && Number.isFinite(rec?.dayOfMonth)) {
+      targetDay = rec.dayOfMonth;
+    }
+
     const last = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
     base.setDate(Math.min(targetDay, last));
     return base;
@@ -1711,7 +1855,7 @@ function addByUnit(date, unit, interval, anchorStartDate) {
     const m = d.getMonth();
     const base = new Date(y, m, 1, 0,0,0,0);
     const last = new Date(y, m + 1, 0).getDate();
-    base.setDate(Math.min(targetDay, last));
+    base.setDate(Math.min(anchorDay, last));
     return base;
   }
 
@@ -1749,7 +1893,7 @@ function getSmartDefaultDateISO() {
 }
 
 /* =========================
-   Tiny date utils (local)
+   Tiny date utils
 ========================= */
 function isoToDate(iso) {
   const [y,m,d] = String(iso || "").split("-").map(n => parseInt(n, 10));
@@ -1766,6 +1910,29 @@ function clampInt(value, min, max, fallback) {
   const n = parseInt(value, 10);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+function slugifyCategoryId(text) {
+  return String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+}
+
+function pickUniqueCategoryId(label, used) {
+  let base = slugifyCategoryId(label) || "categoria";
+  if (base === "otro") base = "categoria_otro";
+  let id = base;
+  let i = 2;
+  while (used.has(id)) {
+    id = `${base}_${i}`;
+    i++;
+  }
+  used.add(id);
+  return id;
 }
 
 /* =========================
@@ -1836,7 +2003,7 @@ function ensureCategoryManagerUI() {
         </div>
       </div>
 
-      <p class="cat-modal-hint">Cambias nombres/colores aquí y queda guardado en este navegador.</p>
+      <p class="cat-modal-hint">Cambias nombres y colores aquí, y queda guardado en este navegador.</p>
 
       <div class="cat-list" id="catList"></div>
 
@@ -1855,12 +2022,12 @@ function ensureCategoryManagerUI() {
   modal.querySelector("#btnCatAdd")?.addEventListener("click", () => {
     const list = modal.querySelector("#catList");
     list?.appendChild(renderCategoryRow({ id: "", label: "", color: "#64748B" }, { isNew: true }));
-    list?.querySelector(".cat-row:last-child input")?.focus?.();
+    list?.querySelector(".cat-row:last-child .cat-label")?.focus?.();
   });
 
   modal.querySelector("#btnCatSave")?.addEventListener("click", saveCategoryManager);
   modal.querySelector("#btnCatReset")?.addEventListener("click", () => {
-    const ok = confirm("¿Restaurar las categorías por defecto? (Se pierden tus cambios locales)");
+    const ok = confirm("¿Restaurar las categorías por defecto? Se pierden tus cambios locales.");
     if (!ok) return;
     UI_STATE.categories = resetCategories();
     rebuildCategoryMap();
@@ -1953,19 +2120,38 @@ function saveCategoryManager() {
   if (!list) return;
 
   const rows = Array.from(list.querySelectorAll(".cat-row"));
+  const used = new Set();
   const next = [];
+
   for (const row of rows) {
     const idExisting = String(row.dataset.catId || "").trim();
     const label = String(row.querySelector(".cat-label")?.value || "").trim();
     const color = String(row.querySelector("input[type='color']")?.value || "#64748B").trim();
+
     if (!label) continue;
-    next.push({ id: idExisting || label, label, color });
+
+    let id = idExisting || "";
+    if (!id) id = pickUniqueCategoryId(label, used);
+    else {
+      id = slugifyCategoryId(id) || pickUniqueCategoryId(label, used);
+      if (used.has(id)) id = pickUniqueCategoryId(label, used);
+      else used.add(id);
+    }
+
+    next.push({ id, label, color });
+  }
+
+  if (!next.some(c => c.id === "otro")) {
+    next.push({ id: "otro", label: "Otro", color: "#64748B" });
   }
 
   const final = next.length ? next : DEFAULT_CATEGORIES;
   UI_STATE.categories = setCategories(final);
   rebuildCategoryMap();
   populateCategorySelects();
+
+  if ($eventCategory && !$eventCategory.value) $eventCategory.value = "otro";
+
   rerender();
   renderCategoryManagerList();
 
@@ -2037,12 +2223,12 @@ function ensureAssigneeManagerUI() {
   modal.querySelector("#btnAsgAdd")?.addEventListener("click", () => {
     const list = modal.querySelector("#asgList");
     list?.appendChild(renderAssigneeRow("", { isNew: true }));
-    list?.querySelector(".cat-row:last-child input")?.focus?.();
+    list?.querySelector(".cat-row:last-child .cat-label")?.focus?.();
   });
 
   modal.querySelector("#btnAsgSave")?.addEventListener("click", saveAssigneeManager);
   modal.querySelector("#btnAsgReset")?.addEventListener("click", () => {
-    const ok = confirm("¿Restaurar los responsables por defecto? (Se pierden tus cambios locales)");
+    const ok = confirm("¿Restaurar los responsables por defecto? Se pierden tus cambios locales.");
     if (!ok) return;
     resetAssignees();
     populateAssignedSelect(UI_STATE.rawEvents);
@@ -2126,12 +2312,19 @@ function saveAssigneeManager() {
   if (!list) return;
 
   const rows = Array.from(list.querySelectorAll(".cat-row"));
-  const names = rows
-    .map(r => r.querySelector(".cat-label")?.value || "")
-    .map(s => String(s).trim())
-    .filter(Boolean);
+  const dedupe = new Map();
 
+  for (const row of rows) {
+    const raw = row.querySelector(".cat-label")?.value || "";
+    const clean = String(raw).trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (!dedupe.has(key)) dedupe.set(key, clean);
+  }
+
+  const names = Array.from(dedupe.values()).sort((a,b) => a.localeCompare(b, "es"));
   const final = setAssignees(names);
+
   populateAssignedSelect(UI_STATE.rawEvents);
   populateAssignedToModal(UI_STATE.rawEvents, ($eventAssignedTo?.value || "").trim());
   rerender();
