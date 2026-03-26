@@ -1,29 +1,19 @@
 /* =============================================================================
-  js/db.js — Firestore CRUD (events) — vPRO∞+ (RBAC READY + ASSIGNEE + RECURRENCE PRO+)
+  js/db.js — Firestore CRUD (events + users)
   -----------------------------------------------------------------------------
-  ✅ create/update/softDelete/restore
-  ✅ get + subscribe por rango (month-friendly)
-  ✅ Filtro por categorías (allowedCategories) para roles (Académico/Admin)
-  ✅ upsertMany (import) con sourceHash anti-duplicados
-  ✅ Rango usa SOLO orderBy(dateStart) (menos índices)
+  NUEVO:
+    getUserProfile(uid)     → lee users/{uid} desde Firestore
+    createUserProfile(user) → crea users/{uid} con role "comunidad" por defecto
 
-  PRO Recurrence:
-  - recurrence:
-      null
-      | { type:"interval", unit:"day|week|month|year", interval:number }
-      | { type:"interval", unit:"month", interval:number, mode:"dayOfMonth", dayOfMonth:number }
-  - Backward compatible: "", "weekly", "monthly", "yearly"
-  - Tolerante: puede venir JSON string en recurrence
+  EXISTENTE (sin cambios):
+    createEvent / updateEvent / softDeleteEvent / restoreEvent
+    getEvent / getEventsInRange / subscribeEventsInRange
+    upsertMany / findEventBySourceHash / findManyBySourceHash
+    recurrenceToLegacyString / dateISOToTimestamp / toDateISO
 
-  RBAC (cliente):
-  - buildRangeQuery(from,to,{ allowedCategories })
-  - allowedCategories vacío -> no filtra (modo admin/legacy)
-  - allowedCategories <= 10 -> where("category","in", allowedCategories)
-  - >10 -> se omite el filtro (limitación Firestore "in")
-
-  Nota inevitable:
-  - la seguridad real sigue yendo en Firestore Rules. Porque la humanidad insiste
-    en confiar en el frontend más de lo que debería.
+  RBAC cliente (categorías filtradas):
+    buildRangeQuery usa allowedCategories para filtrar Firestore
+    (la seguridad real está en Firestore Rules)
 ============================================================================= */
 
 import { db, serverTimestamp, Timestamp } from "./firebase.js";
@@ -35,6 +25,7 @@ import {
   addDoc,
   updateDoc,
   getDoc,
+  setDoc,
   getDocs,
   query,
   where,
@@ -44,17 +35,109 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 /* =========================
-   Collection ref
+   Collection refs
 ========================= */
 const EVENTS_COL = collection(db, "events");
+const USERS_COL  = "users"; // string, usamos doc(db, USERS_COL, uid)
+
+/* =============================================================================
+   GESTIÓN DE USUARIOS (users/{uid})
+   ─────────────────────────────────
+   Estructura del documento de usuario en Firestore:
+   {
+     email:       string,
+     displayName: string,
+     role:        "direccion" | "administrativo" | "comercial" | "docente" | "comunidad",
+     active:      boolean,
+     createdAt:   Timestamp  (solo al crear)
+   }
+
+   Notas de diseño:
+   - El UID de Firebase Auth es el ID del documento (no un campo aparte)
+   - "active: false" bloquea el acceso aunque el rol exista
+   - Los campos allowedCategories y canWrite que puedas ver en Firestore
+     son IGNORADOS — la fuente de verdad es ROLE_PERMISSIONS en constants.js
+   - Al crear automáticamente un nuevo usuario, siempre recibe role "comunidad"
+============================================================================= */
+
+/**
+ * Lee el perfil de un usuario desde Firestore.
+ * @param {string} uid — Firebase Auth UID
+ * @returns {Promise<{uid: string, email: string, displayName: string, role: string, active: boolean} | null>}
+ */
+export async function getUserProfile(uid) {
+  if (!uid) return null;
+
+  try {
+    const ref = doc(db, USERS_COL, uid);
+    const snap = await getDoc(ref);
+
+    if (!snap.exists()) return null;
+
+    const data = snap.data() || {};
+
+    return {
+      uid: snap.id,
+      email:       String(data.email       || "").trim(),
+      displayName: String(data.displayName || "").trim(),
+      role:        String(data.role        || "comunidad").trim(),
+      active:      data.active !== false // undefined o true → activo; solo false → bloqueado
+    };
+  } catch (err) {
+    console.error("[db] getUserProfile error:", err);
+    throw err; // lo maneja auth.js con fallback
+  }
+}
+
+/**
+ * Crea un perfil nuevo en Firestore para un usuario de Firebase Auth.
+ * Solo se llama si getUserProfile() devuelve null (usuario nuevo).
+ * Siempre asigna role "comunidad" y active true.
+ *
+ * @param {{ uid: string, email: string|null, displayName: string|null }} firebaseUser
+ * @returns {Promise<{uid: string, email: string, displayName: string, role: string, active: boolean}>}
+ */
+export async function createUserProfile(firebaseUser) {
+  const { uid, email, displayName } = firebaseUser || {};
+
+  if (!uid) throw new Error("createUserProfile: uid requerido.");
+
+  const profile = {
+    email:       String(email       || "").trim().toLowerCase(),
+    displayName: String(displayName || email || "").trim(),
+    role:        "comunidad",
+    active:      true,
+    createdAt:   serverTimestamp()
+  };
+
+  try {
+    const ref = doc(db, USERS_COL, uid);
+    await setDoc(ref, profile);
+
+    return {
+      uid,
+      email:       profile.email,
+      displayName: profile.displayName,
+      role:        profile.role,
+      active:      profile.active
+    };
+  } catch (err) {
+    console.error("[db] createUserProfile error:", err);
+    throw err;
+  }
+}
+
+/* =============================================================================
+   TODO LO QUE SIGUE ES EL CÓDIGO ORIGINAL DE EVENTOS — SIN CAMBIOS
+============================================================================= */
 
 /* =========================
    Const / helpers
 ========================= */
-const ALLOWED_STATUS = new Set(["pending", "done", "cancelled"]);
-const RECURRENCE_UNITS = new Set(["day", "week", "month", "year"]);
+const ALLOWED_STATUS        = new Set(["pending", "done", "cancelled"]);
+const RECURRENCE_UNITS      = new Set(["day", "week", "month", "year"]);
 const RECURRENCE_MAX_INTERVAL = 100;
-const WHERE_IN_MAX = 10;
+const WHERE_IN_MAX          = 10;
 
 /* =========================
    Date validation helpers
@@ -62,10 +145,8 @@ const WHERE_IN_MAX = 10;
 function isValidISODate(dateISO) {
   if (!dateISO || typeof dateISO !== "string") return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return false;
-
   const [y, m, d] = dateISO.split("-").map(n => parseInt(n, 10));
   if (!y || !m || !d) return false;
-
   const dt = new Date(y, m - 1, d);
   return dt.getFullYear() === y && (dt.getMonth() + 1) === m && dt.getDate() === d;
 }
@@ -87,7 +168,6 @@ function stableStringify(value) {
   try {
     if (value === null || value === undefined) return "";
     if (typeof value !== "object") return String(value);
-
     if (Array.isArray(value)) {
       return JSON.stringify(value.map(v => {
         if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -99,14 +179,11 @@ function stableStringify(value) {
         return v;
       }));
     }
-
     const keys = Object.keys(value).sort();
     const obj = {};
     for (const k of keys) obj[k] = value[k];
     return JSON.stringify(obj);
-  } catch (_) {
-    return "";
-  }
+  } catch (_) { return ""; }
 }
 
 function sameValue(a, b) {
@@ -139,7 +216,6 @@ function normalizeAllowedCategories_(allowedCategories) {
 function withCategoryFilter_(constraints, allowedCategories) {
   const cats = normalizeAllowedCategories_(allowedCategories);
   if (!cats.length) return constraints;
-
   if (cats.length > WHERE_IN_MAX) {
     console.warn(
       `[db] allowedCategories tiene ${cats.length} items (>10). ` +
@@ -147,7 +223,6 @@ function withCategoryFilter_(constraints, allowedCategories) {
     );
     return constraints;
   }
-
   return [...constraints, where("category", "in", cats)];
 }
 
@@ -160,20 +235,13 @@ function normalizeRecurrence(raw) {
   if (typeof raw === "string") {
     const trimmed = String(raw).trim();
     const lowered = trimmed.toLowerCase();
-
-    if (lowered === "weekly")  return { type: "interval", unit: "week", interval: 1 };
+    if (lowered === "weekly")  return { type: "interval", unit: "week",  interval: 1 };
     if (lowered === "monthly") return { type: "interval", unit: "month", interval: 1 };
-    if (lowered === "yearly")  return { type: "interval", unit: "year", interval: 1 };
-
+    if (lowered === "yearly")  return { type: "interval", unit: "year",  interval: 1 };
     if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        return normalizeRecurrence(parsed);
-      } catch (_) {
-        return null;
-      }
+      try { return normalizeRecurrence(JSON.parse(trimmed)); }
+      catch (_) { return null; }
     }
-
     return null;
   }
 
@@ -181,56 +249,39 @@ function normalizeRecurrence(raw) {
     const unit = normText(raw.unit || raw.frequency || raw.everyUnit || "");
     const intervalRaw = raw.interval ?? raw.every ?? raw.count ?? 1;
     const interval = parseInt(intervalRaw, 10);
-
     if (!RECURRENCE_UNITS.has(unit)) return null;
     if (!Number.isFinite(interval) || interval < 1 || interval > RECURRENCE_MAX_INTERVAL) return null;
-
-    const normalized = {
-      type: "interval",
-      unit,
-      interval
-    };
-
+    const normalized = { type: "interval", unit, interval };
     if (unit === "month") {
       const mode = normText(raw.mode || raw.monthMode || "");
       const dayOfMonth = parseInt(raw.dayOfMonth ?? raw.day ?? "", 10);
-
       if (mode === "dayofmonth" && Number.isFinite(dayOfMonth) && dayOfMonth >= 1 && dayOfMonth <= 31) {
         normalized.mode = "dayOfMonth";
         normalized.dayOfMonth = dayOfMonth;
       }
     }
-
     return normalized;
   }
-
   return null;
 }
 
 function sanitizeRecurrenceForStorage(raw) {
   const rec = normalizeRecurrence(raw);
   if (!rec) return null;
-
-  const out = {
-    type: "interval",
-    unit: rec.unit,
-    interval: rec.interval
-  };
-
+  const out = { type: "interval", unit: rec.unit, interval: rec.interval };
   if (rec.unit === "month" && rec.mode === "dayOfMonth" && Number.isFinite(rec.dayOfMonth)) {
     out.mode = "dayOfMonth";
     out.dayOfMonth = rec.dayOfMonth;
   }
-
   return out;
 }
 
 export function recurrenceToLegacyString(rec) {
   const r = normalizeRecurrence(rec);
   if (!r) return "";
-  if (r.unit === "week" && r.interval === 1) return "weekly";
+  if (r.unit === "week"  && r.interval === 1 && !r.mode) return "weekly";
   if (r.unit === "month" && r.interval === 1 && !r.mode) return "monthly";
-  if (r.unit === "year" && r.interval === 1) return "yearly";
+  if (r.unit === "year"  && r.interval === 1)            return "yearly";
   return "";
 }
 
@@ -240,7 +291,6 @@ export function recurrenceToLegacyString(rec) {
 export function dateISOToTimestamp(dateISO) {
   const iso = normalizeISODate(dateISO);
   if (!iso) throw new Error("dateISO inválido (usa formato yyyy-mm-dd).");
-
   const [y, m, d] = iso.split("-").map(n => parseInt(n, 10));
   const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
   return Timestamp.fromDate(dt);
@@ -257,75 +307,56 @@ export function toDateISO(value) {
 ========================= */
 function extractAssignedTo(input = {}, fallback = {}) {
   const val =
-    input.assignedTo ??
-    input.assignee ??
-    input.assigned ??
-    input.eventAssignedTo ??
-    input.eventAssignee ??
-    fallback.assignedTo ??
-    fallback.assignee ??
-    "";
-
+    input.assignedTo    ?? input.assignee  ?? input.assigned ??
+    input.eventAssignedTo ?? input.eventAssignee ??
+    fallback.assignedTo ?? fallback.assignee ?? "";
   return cleanString(val, "");
 }
 
 function extractRecurrence(input = {}, fallback = {}) {
   const raw =
-    input.recurrence ??
-    input.repeat ??
-    input.repetition ??
-    input.eventRecurrence ??
-    input.eventRepeat ??
-    fallback.recurrence ??
-    fallback.repeat ??
-    fallback.repetition ??
-    "";
-
+    input.recurrence  ?? input.repeat       ?? input.repetition ??
+    input.eventRecurrence ?? input.eventRepeat ??
+    fallback.recurrence ?? fallback.repeat   ?? fallback.repetition ?? "";
   return sanitizeRecurrenceForStorage(raw);
 }
 
 function extractDateISO(input = {}, fallback = {}) {
   const raw =
-    input.dateISO ??
-    input.date ??
-    input.dateStr ??
-    input.eventDate ??
-    fallback.dateISO ??
-    fallback.date ??
-    "";
-
+    input.dateISO ?? input.date ?? input.dateStr ?? input.eventDate ??
+    fallback.dateISO ?? fallback.date ?? "";
   return normalizeISODate(raw);
 }
 
 function normalizeEventInputStrict(input = {}) {
-  const title = cleanString(input.title);
-  const category = normText(input.category);
-  const notes = cleanString(input.notes, "");
-  const status = normalizeStatus(input.status);
-  const dateISO = extractDateISO(input, {});
+  const title      = cleanString(input.title);
+  const category   = normText(input.category);
+  const notes      = cleanString(input.notes, "");
+  const status     = normalizeStatus(input.status);
+  const dateISO    = extractDateISO(input, {});
   const assignedTo = extractAssignedTo(input, {});
   const recurrence = extractRecurrence(input, {});
 
-  if (!title) throw new Error("El título es obligatorio.");
+  if (!title)   throw new Error("El título es obligatorio.");
   if (!category) throw new Error("La categoría es obligatoria.");
-  if (!dateISO) throw new Error("La fecha es obligatoria.");
+  if (!dateISO)  throw new Error("La fecha es obligatoria.");
   if (!isValidISODate(dateISO)) throw new Error("Fecha inválida. Usa yyyy-mm-dd.");
 
   return { title, category, status, notes, dateISO, assignedTo, recurrence };
 }
 
 function normalizeEventInputTolerant(input = {}, fallback = {}) {
-  const title = cleanString(input.title ?? fallback.title);
-  const category = normText(input.category ?? fallback.category);
-  const notes = cleanString(input.notes ?? fallback.notes, "");
-  const status = normalizeStatus(input.status ?? fallback.status ?? "pending");
-  const dateISO = extractDateISO(input, fallback);
+  const title      = cleanString(input.title      ?? fallback.title);
+  const category   = normText(input.category      ?? fallback.category);
+  const notes      = cleanString(input.notes      ?? fallback.notes, "");
+  const status     = normalizeStatus(input.status ?? fallback.status ?? "pending");
+  const dateISO    = extractDateISO(input, fallback);
   const assignedTo = extractAssignedTo(input, fallback);
   const recurrence = extractRecurrence(input, fallback);
 
-  if (!title) throw new Error("El título es obligatorio.");
+  if (!title)   throw new Error("El título es obligatorio.");
   if (!category) throw new Error("La categoría es obligatoria.");
-  if (!dateISO) throw new Error("La fecha es obligatoria.");
+  if (!dateISO)  throw new Error("La fecha es obligatoria.");
   if (!isValidISODate(dateISO)) throw new Error("Fecha inválida. Usa yyyy-mm-dd.");
 
   return { title, category, status, notes, dateISO, assignedTo, recurrence };
@@ -339,52 +370,31 @@ function normalizePartialPatch(input = {}, existing = {}) {
     if (!title) throw new Error("El título no puede quedar vacío.");
     patch.title = title;
   }
-
   if ("category" in input) {
     const category = normText(input.category);
     if (!category) throw new Error("La categoría no puede quedar vacía.");
     patch.category = category;
   }
-
   if ("status" in input) {
     patch.status = normalizeStatus(input.status);
   }
-
   if ("notes" in input) {
     patch.notes = cleanString(input.notes, "");
   }
-
-  if (
-    "assignedTo" in input ||
-    "assignee" in input ||
-    "assigned" in input ||
-    "eventAssignedTo" in input ||
-    "eventAssignee" in input
-  ) {
+  if ("assignedTo" in input || "assignee" in input || "assigned" in input ||
+      "eventAssignedTo" in input || "eventAssignee" in input) {
     patch.assignedTo = extractAssignedTo(input, existing);
   }
-
-  if (
-    "dateISO" in input ||
-    "date" in input ||
-    "dateStr" in input ||
-    "eventDate" in input
-  ) {
+  if ("dateISO" in input || "date" in input || "dateStr" in input || "eventDate" in input) {
     const dateISO = extractDateISO(input, existing);
     if (!dateISO) throw new Error("La fecha es obligatoria.");
-    patch.dateISO = dateISO;
+    patch.dateISO   = dateISO;
     patch.dateStart = dateISOToTimestamp(dateISO);
   }
-
-  if (
-    "recurrence" in input ||
-    "repeat" in input ||
-    "repetition" in input ||
-    "eventRecurrence" in input ||
-    "eventRepeat" in input
-  ) {
+  if ("recurrence" in input || "repeat" in input || "repetition" in input ||
+      "eventRecurrence" in input || "eventRepeat" in input) {
     const recurrence = extractRecurrence(input, existing);
-    patch.recurrence = recurrence || null;
+    patch.recurrence       = recurrence || null;
     patch.recurrenceLegacy = recurrenceToLegacyString(recurrence);
   }
 
@@ -401,27 +411,17 @@ export async function createEvent(input, userEmail) {
   const email = cleanString(userEmail, "");
 
   const payload = {
-    title,
-    category,
-    status,
-    notes,
-
-    assignedTo,
-
-    recurrence: recurrence || null,
-    recurrenceLegacy: recurrenceToLegacyString(recurrence),
-
-    dateStart: dateISOToTimestamp(dateISO),
+    title, category, status, notes, assignedTo,
+    recurrence:        recurrence || null,
+    recurrenceLegacy:  recurrenceToLegacyString(recurrence),
+    dateStart:         dateISOToTimestamp(dateISO),
     dateISO,
-
-    createdBy: email,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    updatedBy: email,
-
-    deletedAt: null,
-
-    source: normText(input?.source || "manual") || "manual",
+    createdBy:  email,
+    createdAt:  serverTimestamp(),
+    updatedAt:  serverTimestamp(),
+    updatedBy:  email,
+    deletedAt:  null,
+    source:     normText(input?.source || "manual") || "manual",
     sourceHash: input?.sourceHash ? cleanString(input.sourceHash, "") : null
   };
 
@@ -446,34 +446,20 @@ export async function updateEvent(eventId, input, userEmail) {
 
   let patch = {};
   const hasKnownPatchField =
-    "title" in (input || {}) ||
-    "category" in (input || {}) ||
-    "status" in (input || {}) ||
-    "notes" in (input || {}) ||
-    "assignedTo" in (input || {}) ||
-    "assignee" in (input || {}) ||
-    "assigned" in (input || {}) ||
-    "eventAssignedTo" in (input || {}) ||
-    "eventAssignee" in (input || {}) ||
-    "dateISO" in (input || {}) ||
-    "date" in (input || {}) ||
-    "dateStr" in (input || {}) ||
-    "eventDate" in (input || {}) ||
-    "recurrence" in (input || {}) ||
-    "repeat" in (input || {}) ||
-    "repetition" in (input || {}) ||
-    "eventRecurrence" in (input || {}) ||
-    "eventRepeat" in (input || {});
+    "title" in (input || {}) || "category" in (input || {}) || "status" in (input || {}) ||
+    "notes" in (input || {}) || "assignedTo" in (input || {}) || "assignee" in (input || {}) ||
+    "assigned" in (input || {}) || "eventAssignedTo" in (input || {}) || "eventAssignee" in (input || {}) ||
+    "dateISO" in (input || {}) || "date" in (input || {}) || "dateStr" in (input || {}) ||
+    "eventDate" in (input || {}) || "recurrence" in (input || {}) || "repeat" in (input || {}) ||
+    "repetition" in (input || {}) || "eventRecurrence" in (input || {}) || "eventRepeat" in (input || {});
 
   if (hasKnownPatchField) {
     patch = normalizePartialPatch(input, existing);
   } else {
     const normalized = normalizeEventInputTolerant(input, existing);
     patch = {
-      title: normalized.title,
-      category: normalized.category,
-      status: normalized.status,
-      notes: normalized.notes,
+      title: normalized.title, category: normalized.category,
+      status: normalized.status, notes: normalized.notes,
       assignedTo: normalized.assignedTo,
       recurrence: normalized.recurrence || null,
       recurrenceLegacy: recurrenceToLegacyString(normalized.recurrence),
@@ -483,11 +469,11 @@ export async function updateEvent(eventId, input, userEmail) {
   }
 
   const changed =
-    ("title" in patch && !sameValue(existing.title, patch.title)) ||
-    ("category" in patch && !sameValue(existing.category, patch.category)) ||
-    ("status" in patch && !sameValue(existing.status, patch.status)) ||
-    ("notes" in patch && !sameValue(existing.notes, patch.notes)) ||
-    ("dateISO" in patch && !sameValue(existing.dateISO, patch.dateISO)) ||
+    ("title"      in patch && !sameValue(existing.title,      patch.title))      ||
+    ("category"   in patch && !sameValue(existing.category,   patch.category))   ||
+    ("status"     in patch && !sameValue(existing.status,     patch.status))     ||
+    ("notes"      in patch && !sameValue(existing.notes,      patch.notes))      ||
+    ("dateISO"    in patch && !sameValue(existing.dateISO,    patch.dateISO))    ||
     ("assignedTo" in patch && !sameValue(existing.assignedTo, patch.assignedTo)) ||
     ("recurrence" in patch && !sameValue(existing.recurrence, patch.recurrence));
 
@@ -509,15 +495,12 @@ export async function updateEvent(eventId, input, userEmail) {
 export async function softDeleteEvent(eventId, userEmail) {
   const id = cleanString(eventId, "");
   if (!id) throw new Error("eventId requerido");
-
   const ref = doc(db, "events", id);
-
   await updateDoc(ref, {
     deletedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     updatedBy: cleanString(userEmail, "")
   });
-
   return true;
 }
 
@@ -527,15 +510,12 @@ export async function softDeleteEvent(eventId, userEmail) {
 export async function restoreEvent(eventId, userEmail) {
   const id = cleanString(eventId, "");
   if (!id) throw new Error("eventId requerido");
-
   const ref = doc(db, "events", id);
-
   await updateDoc(ref, {
     deletedAt: null,
     updatedAt: serverTimestamp(),
     updatedBy: cleanString(userEmail, "")
   });
-
   return true;
 }
 
@@ -545,7 +525,6 @@ export async function restoreEvent(eventId, userEmail) {
 export async function getEvent(eventId) {
   const id = cleanString(eventId, "");
   if (!id) throw new Error("eventId requerido");
-
   const ref = doc(db, "events", id);
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
@@ -553,13 +532,13 @@ export async function getEvent(eventId) {
 }
 
 /* =========================
-   Query builder por rango (+ RBAC categorías)
+   Query builder (+ RBAC categorías)
 ========================= */
 function buildRangeQuery(fromDate, toDate, opts = {}) {
   if (!fromDate || !toDate) throw new Error("fromDate y toDate son requeridos");
 
   const from = Timestamp.fromDate(startOfDay(fromDate));
-  const to = Timestamp.fromDate(endOfDay(toDate));
+  const to   = Timestamp.fromDate(endOfDay(toDate));
 
   const constraintsBase = [
     where("deletedAt", "==", null),
@@ -569,11 +548,7 @@ function buildRangeQuery(fromDate, toDate, opts = {}) {
 
   const constraints = withCategoryFilter_(constraintsBase, opts.allowedCategories);
 
-  return query(
-    EVENTS_COL,
-    ...constraints,
-    orderBy("dateStart", "asc")
-  );
+  return query(EVENTS_COL, ...constraints, orderBy("dateStart", "asc"));
 }
 
 /* =========================
@@ -590,17 +565,10 @@ export async function getEventsInRange(fromDate, toDate, opts = {}) {
 ========================= */
 export function subscribeEventsInRange(fromDate, toDate, cb, onError, opts = {}) {
   const q = buildRangeQuery(fromDate, toDate, opts);
-
   return onSnapshot(
     q,
-    (snap) => {
-      const events = snap.docs.map(mapEventDoc);
-      cb?.(events);
-    },
-    (err) => {
-      console.error("subscribeEventsInRange error:", err);
-      onError?.(err);
-    }
+    (snap) => cb?.(snap.docs.map(mapEventDoc)),
+    (err)  => { console.error("subscribeEventsInRange error:", err); onError?.(err); }
   );
 }
 
@@ -610,7 +578,6 @@ export function subscribeEventsInRange(fromDate, toDate, cb, onError, opts = {})
 export async function findEventBySourceHash(sourceHash) {
   const sh = cleanString(sourceHash, "");
   if (!sh) return null;
-
   const q = query(EVENTS_COL, where("sourceHash", "==", sh), limit(1));
   const snaps = await getDocs(q);
   if (snaps.empty) return null;
@@ -629,12 +596,7 @@ export async function findManyBySourceHash(hashes = []) {
 
   for (let i = 0; i < uniq.length; i += WHERE_IN_MAX) {
     const chunk = uniq.slice(i, i + WHERE_IN_MAX);
-
-    const q = query(
-      EVENTS_COL,
-      where("sourceHash", "in", chunk)
-    );
-
+    const q = query(EVENTS_COL, where("sourceHash", "in", chunk));
     const snaps = await getDocs(q);
     for (const d of snaps.docs) {
       const ev = mapEventDoc(d);
@@ -658,12 +620,8 @@ export async function upsertMany(events = [], userEmail) {
   const hashes = items.map(r => cleanString(r?.sourceHash, "")).filter(Boolean);
   let existingByHash = new Map();
 
-  try {
-    existingByHash = await findManyBySourceHash(hashes);
-  } catch (e) {
-    console.warn("findManyBySourceHash failed, fallback to per-item:", e);
-    existingByHash = new Map();
-  }
+  try { existingByHash = await findManyBySourceHash(hashes); }
+  catch (e) { console.warn("findManyBySourceHash failed, fallback to per-item:", e); }
 
   for (const raw of items) {
     try {
@@ -677,7 +635,6 @@ export async function upsertMany(events = [], userEmail) {
       }
 
       let existing = existingByHash.get(sourceHash) || null;
-
       if (!existing) {
         existing = await findEventBySourceHash(sourceHash);
         if (existing) existingByHash.set(sourceHash, existing);
@@ -691,13 +648,12 @@ export async function upsertMany(events = [], userEmail) {
       }
 
       const incoming = normalizeEventInputTolerant(raw, existing);
-
       const changed =
-        !sameValue(incoming.title, existing.title) ||
-        !sameValue(incoming.category, existing.category) ||
-        !sameValue(incoming.status, existing.status) ||
-        !sameValue(incoming.notes, existing.notes) ||
-        !sameValue(incoming.dateISO, existing.dateISO) ||
+        !sameValue(incoming.title,      existing.title)      ||
+        !sameValue(incoming.category,   existing.category)   ||
+        !sameValue(incoming.status,     existing.status)     ||
+        !sameValue(incoming.notes,      existing.notes)      ||
+        !sameValue(incoming.dateISO,    existing.dateISO)    ||
         !sameValue(incoming.assignedTo, existing.assignedTo) ||
         !sameValue(incoming.recurrence, existing.recurrence);
 
@@ -708,13 +664,10 @@ export async function upsertMany(events = [], userEmail) {
       }
 
       await updateEvent(existing.id, {
-        title: incoming.title,
-        category: incoming.category,
-        status: incoming.status,
-        notes: incoming.notes,
+        title: incoming.title, category: incoming.category,
+        status: incoming.status, notes: incoming.notes,
         assignedTo: incoming.assignedTo,
-        recurrence: incoming.recurrence,
-        dateISO: incoming.dateISO
+        recurrence: incoming.recurrence, dateISO: incoming.dateISO
       }, email);
 
       results.updated++;
@@ -730,45 +683,37 @@ export async function upsertMany(events = [], userEmail) {
 }
 
 /* =========================
-   Mapper doc -> objeto usable en UI
+   Mapper doc → objeto UI
 ========================= */
 function mapEventDoc(docSnap) {
   const data = docSnap.data() || {};
 
   const dateStart = data.dateStart || null;
-  const dateISO = cleanString(data.dateISO, "") || toDateISO(dateStart);
+  const dateISO   = cleanString(data.dateISO, "") || toDateISO(dateStart);
 
   const rec =
     (data.recurrence !== undefined ? data.recurrence : null) ??
-    (data.recurrenceLegacy !== undefined ? data.recurrenceLegacy : null) ??
-    "";
+    (data.recurrenceLegacy !== undefined ? data.recurrenceLegacy : null) ?? "";
 
   const recurrence = normalizeRecurrence(rec);
 
   return {
-    id: docSnap.id,
-
-    title: cleanString(data.title, ""),
-    category: cleanString(data.category, ""),
-    status: normalizeStatus(data.status || "pending"),
-    notes: cleanString(data.notes, ""),
-
-    assignedTo: cleanString(data.assignedTo, ""),
-
+    id:              docSnap.id,
+    title:           cleanString(data.title,   ""),
+    category:        cleanString(data.category,""),
+    status:          normalizeStatus(data.status || "pending"),
+    notes:           cleanString(data.notes,   ""),
+    assignedTo:      cleanString(data.assignedTo, ""),
     recurrence,
     recurrenceLegacy: cleanString(data.recurrenceLegacy, "") || recurrenceToLegacyString(recurrence),
-
     dateStart,
     dateISO,
-
-    createdBy: cleanString(data.createdBy, ""),
-    createdAt: data.createdAt || null,
-    updatedAt: data.updatedAt || null,
-    updatedBy: cleanString(data.updatedBy, ""),
-
-    deletedAt: data.deletedAt ?? null,
-
-    source: cleanString(data.source, "manual") || "manual",
+    createdBy:  cleanString(data.createdBy,  ""),
+    createdAt:  data.createdAt  || null,
+    updatedAt:  data.updatedAt  || null,
+    updatedBy:  cleanString(data.updatedBy,  ""),
+    deletedAt:  data.deletedAt  ?? null,
+    source:     cleanString(data.source, "manual") || "manual",
     sourceHash: cleanString(data.sourceHash, "") || null
   };
 }
