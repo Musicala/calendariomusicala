@@ -11,8 +11,8 @@
       ✅ filtra consultas por allowedCategories (RBAC cliente)
 ============================================================================= */
 
-import { initUI, setEvents, setMonth, getCurrentView } from "./ui.js";
-import { createEvent, updateEvent, softDeleteEvent, subscribeEventsInRange } from "./db.js";
+import { initUI, setEvents, setMonth, getCurrentView, setCatalogData } from "./ui.js";
+import { createEvent, updateEvent, softDeleteEvent, subscribeEventsInRange, getCatalogSettings } from "./db.js";
 import { startOfMonth, endOfMonth } from "./utils.js";
 
 // Para que repeticiones aparezcan en meses futuros,
@@ -30,6 +30,7 @@ let ALLOWED_CATEGORIES = [];       // categorías permitidas para queries
 
 let unsubMonth = null;             // unsubscribe del onSnapshot
 let uiInitialized = false;
+let catalogsLoaded = false;
 
 /* =========================
    Helpers
@@ -79,8 +80,24 @@ function subscribeMonth(year, monthIndex) {
       alert("No se pudieron cargar eventos (revisa permisos o conexión).");
     },
     // opts RBAC cliente (db.js lo usa para filtrar category in allowedCategories)
-    { allowedCategories: ALLOWED_CATEGORIES }
+    { allowedCategories: CAN_WRITE ? [] : ALLOWED_CATEGORIES }
   );
+}
+
+async function ensureCatalogsLoaded() {
+  if (catalogsLoaded) {
+    setCatalogData({ userEmail: USER_EMAIL });
+    return;
+  }
+
+  try {
+    const catalogs = await getCatalogSettings();
+    setCatalogData({ ...catalogs, userEmail: USER_EMAIL });
+    catalogsLoaded = true;
+  } catch (err) {
+    console.warn("[app] No se pudieron cargar catálogos compartidos. Se usa cache local.", err);
+    setCatalogData({ userEmail: USER_EMAIL });
+  }
 }
 
 /* =========================
@@ -164,6 +181,7 @@ window.addEventListener("auth:changed", (ev) => {
     USER_ROLE = null;
     CAN_WRITE = false;
     ALLOWED_CATEGORIES = [];
+    catalogsLoaded = false;
 
     safeUnsub();
     // UI ya queda escondida desde auth.js
@@ -180,6 +198,7 @@ window.addEventListener("auth:changed", (ev) => {
 
   // UI
   ensureUI();
+  ensureCatalogsLoaded().catch(err => console.error("[app] ensureCatalogsLoaded error:", err));
 
   // Mes actual (el que está mostrando UI)
   const { year, monthIndex } = getCurrentView();

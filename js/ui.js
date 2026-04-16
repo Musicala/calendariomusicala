@@ -32,16 +32,19 @@
 import {
   getCategories,
   setCategories,
+  hydrateCategories,
   resetCategories,
   DEFAULT_CATEGORIES,
   getAssignees,
   setAssignees,
+  hydrateAssignees,
   resetAssignees,
   EVENT_STATUS,
   STATUS_COLORS,
   CALENDAR_CONFIG,
   ASSIGNEES
 } from "./constants.js";
+import { saveCatalogSettings } from "./db.js";
 
 import {
   buildMonthGrid,
@@ -132,6 +135,7 @@ let UI_STATE = {
 
   // Permissions (client-side)
   canWrite: true,
+  userEmail: "",
 
   onNavigate: null,
   onCreate: null,
@@ -591,6 +595,24 @@ export function getFilters() {
 export function setCanWrite(canWrite) {
   UI_STATE.canWrite = !!canWrite;
   applyPermissionGates();
+  rerender();
+}
+
+export function setCatalogData({ categories, assignees, userEmail } = {}) {
+  if (typeof userEmail === "string") UI_STATE.userEmail = userEmail;
+
+  if (Array.isArray(categories)) {
+    UI_STATE.categories = hydrateCategories(categories);
+    rebuildCategoryMap();
+    populateCategorySelects();
+  }
+
+  if (Array.isArray(assignees)) {
+    hydrateAssignees(assignees);
+    populateAssignedSelect(UI_STATE.rawEvents);
+    populateAssignedToModal(UI_STATE.rawEvents, ($eventAssignedTo?.value || "").trim());
+  }
+
   rerender();
 }
 
@@ -2034,6 +2056,8 @@ function ensureCategoryManagerUI() {
     populateCategorySelects();
     rerender();
     renderCategoryManagerList();
+    saveCatalogSettings({ categories: UI_STATE.categories }, UI_STATE.userEmail)
+      .catch(err => console.error("reset categories sync error:", err));
     notify("Categorías restauradas ✅");
   });
 
@@ -2114,7 +2138,7 @@ function renderCategoryRow(cat, { isNew = false } = {}) {
   return row;
 }
 
-function saveCategoryManager() {
+async function saveCategoryManager() {
   if (!$categoryModal) return;
   const list = $categoryModal.querySelector("#catList");
   if (!list) return;
@@ -2154,6 +2178,14 @@ function saveCategoryManager() {
 
   rerender();
   renderCategoryManagerList();
+
+  try {
+    await saveCatalogSettings({ categories: final }, UI_STATE.userEmail);
+  } catch (err) {
+    console.error("saveCategoryManager error:", err);
+    notify("Las categorías quedaron guardadas solo en este navegador. Falló la nube.", { ms: 3200 });
+    return;
+  }
 
   notify("Categorías guardadas ✅");
   closeCategoryManager();
@@ -2230,11 +2262,13 @@ function ensureAssigneeManagerUI() {
   modal.querySelector("#btnAsgReset")?.addEventListener("click", () => {
     const ok = confirm("¿Restaurar los responsables por defecto? Se pierden tus cambios locales.");
     if (!ok) return;
-    resetAssignees();
+    const assignees = resetAssignees();
     populateAssignedSelect(UI_STATE.rawEvents);
     populateAssignedToModal(UI_STATE.rawEvents, ($eventAssignedTo?.value || "").trim());
     rerender();
     renderAssigneeManagerList();
+    saveCatalogSettings({ assignees }, UI_STATE.userEmail)
+      .catch(err => console.error("reset assignees sync error:", err));
     notify("Responsables restaurados ✅");
   });
 
@@ -2306,7 +2340,7 @@ function renderAssigneeRow(name, { isNew = false } = {}) {
   return row;
 }
 
-function saveAssigneeManager() {
+async function saveAssigneeManager() {
   if (!$assigneeModal) return;
   const list = $assigneeModal.querySelector("#asgList");
   if (!list) return;
@@ -2329,6 +2363,15 @@ function saveAssigneeManager() {
   populateAssignedToModal(UI_STATE.rawEvents, ($eventAssignedTo?.value || "").trim());
   rerender();
   renderAssigneeManagerList();
+
+  try {
+    await saveCatalogSettings({ assignees: final }, UI_STATE.userEmail);
+  } catch (err) {
+    console.error("saveAssigneeManager error:", err);
+    notify("Los responsables quedaron guardados solo en este navegador. Falló la nube.", { ms: 3200 });
+    return;
+  }
+
   notify(`Responsables guardados ✅ (${final.length})`);
   closeAssigneeManager();
 }

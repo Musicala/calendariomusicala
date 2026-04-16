@@ -18,6 +18,7 @@
 
 import { db, serverTimestamp, Timestamp } from "./firebase.js";
 import { startOfDay, endOfDay, toISODateLocal, normText } from "./utils.js";
+import { DEFAULT_CATEGORIES, DEFAULT_ASSIGNEES } from "./constants.js";
 
 import {
   collection,
@@ -39,6 +40,7 @@ import {
 ========================= */
 const EVENTS_COL = collection(db, "events");
 const USERS_COL  = "users"; // string, usamos doc(db, USERS_COL, uid)
+const SETTINGS_DOC = doc(db, "settings", "catalogs");
 
 /* =============================================================================
    GESTIÓN DE USUARIOS (users/{uid})
@@ -125,6 +127,40 @@ export async function createUserProfile(firebaseUser) {
     console.error("[db] createUserProfile error:", err);
     throw err;
   }
+}
+
+export async function getCatalogSettings() {
+  try {
+    const snap = await getDoc(SETTINGS_DOC);
+    if (!snap.exists()) {
+      return {
+        categories: DEFAULT_CATEGORIES,
+        assignees: DEFAULT_ASSIGNEES
+      };
+    }
+
+    const data = snap.data() || {};
+    return {
+      categories: Array.isArray(data.categories) ? data.categories : DEFAULT_CATEGORIES,
+      assignees: Array.isArray(data.assignees) ? data.assignees : DEFAULT_ASSIGNEES
+    };
+  } catch (err) {
+    console.error("[db] getCatalogSettings error:", err);
+    throw err;
+  }
+}
+
+export async function saveCatalogSettings({ categories, assignees } = {}, userEmail = "") {
+  const patch = {
+    updatedAt: serverTimestamp(),
+    updatedBy: cleanString(userEmail, "")
+  };
+
+  if (Array.isArray(categories)) patch.categories = categories;
+  if (Array.isArray(assignees)) patch.assignees = assignees;
+
+  await setDoc(SETTINGS_DOC, patch, { merge: true });
+  return true;
 }
 
 /* =============================================================================

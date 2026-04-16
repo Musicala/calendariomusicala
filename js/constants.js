@@ -267,6 +267,10 @@ export function setCategories(categories) {
   return final;
 }
 
+export function hydrateCategories(categories) {
+  return setCategories(categories);
+}
+
 export function resetCategories() {
   safeRemoveStorage(CATEGORIES_STORAGE_KEY);
   return clone(DEFAULT_CATEGORIES);
@@ -383,6 +387,10 @@ export function setAssignees(names) {
   const final = normalizeAssigneesList(names);
   safeSetStorage(ASSIGNEES_STORAGE_KEY, JSON.stringify(final));
   return final;
+}
+
+export function hydrateAssignees(names) {
+  return setAssignees(names);
 }
 
 export function resetAssignees() {
