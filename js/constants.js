@@ -127,6 +127,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
       "academico",
       "eventos",
       "cumpleanos",
+      "festividades",
       "marketing",
       "otro"
     ]
@@ -142,6 +143,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
       "academico",
       "eventos",
       "cumpleanos",
+      "festividades",
       "marketing",
       "otro"
     ]
@@ -154,6 +156,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
       "academico",
       "eventos",
       "cumpleanos",
+      "festividades",
       "marketing",
       "otro"
     ]
@@ -165,6 +168,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
       "academico",
       "eventos",
       "cumpleanos",
+      "festividades",
       "otro"
     ]
   },
@@ -173,7 +177,8 @@ export const ROLE_PERMISSIONS = Object.freeze({
     canWrite: false,
     allowedCategories: [
       "eventos",
-      "cumpleanos"
+      "cumpleanos",
+      "festividades"
     ]
   }
 
@@ -208,6 +213,7 @@ export const DEFAULT_CATEGORIES = [
   { id: "academico",      label: "Académico",                 color: "#22C55E" },
   { id: "eventos",        label: "Eventos",                   color: "#A855F7" },
   { id: "cumpleanos",     label: "Cumpleaños",                color: "#EC4899" },
+  { id: "festividades",   label: "Festividades",              color: "#F59E0B" },
   { id: "marketing",      label: "Marketing y publicidad",    color: "#8B5CF6" },
   { id: "otro",           label: "Otro",                      color: "#64748B" }
 ];

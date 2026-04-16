@@ -79,6 +79,8 @@ const $todayList = qs("#todayList");
 const $nextList  = qs("#nextList");
 const $birthdayBanner = qs("#birthdayBanner");
 const $birthdayBannerList = qs("#birthdayBannerList");
+const $festivityBanner = qs("#festivityBanner");
+const $festivityBannerList = qs("#festivityBannerList");
 
 const $filterCategory   = qs("#filterCategory");
 const $filterStatus     = qs("#filterStatus");
@@ -588,22 +590,32 @@ export function setCatalogData({ categories, assignees, userEmail } = {}) {
 function rerender() {
   UI_STATE.events = expandRecurringForVisibleRange(UI_STATE.rawEvents, UI_STATE.year, UI_STATE.monthIndex);
 
-  renderBirthdayBanner();
+  renderWeeklyCategoryBanner({
+    bannerEl: $birthdayBanner,
+    listEl: $birthdayBannerList,
+    categoryId: "cumpleanos",
+    fallbackTitle: "Cumpleaños"
+  });
+  renderWeeklyCategoryBanner({
+    bannerEl: $festivityBanner,
+    listEl: $festivityBannerList,
+    categoryId: "festividades",
+    fallbackTitle: "Festividad"
+  });
   renderOverview();
   renderCalendar(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
 
   if (UI_STATE.view === "list") renderList(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
 }
 
-function renderBirthdayBanner() {
-  if (!$birthdayBanner || !$birthdayBannerList) return;
-
+function renderWeeklyCategoryBanner({ bannerEl, listEl, categoryId, fallbackTitle }) {
+  if (!bannerEl || !listEl) return;
   const now = new Date();
   const day = now.getDay(); // 0 dom, 1 lun ... 6 sab
 
   if (day === 0) {
-    hide($birthdayBanner);
-    $birthdayBannerList.innerHTML = "";
+    hide(bannerEl);
+    listEl.innerHTML = "";
     return;
   }
 
@@ -616,8 +628,8 @@ function renderBirthdayBanner() {
   const fromISO = toISODateLocal(monday);
   const toISO = toISODateLocal(saturday);
 
-  const birthdays = applyFilters(UI_STATE.events)
-    .filter(ev => String(ev.category || "").trim() === "cumpleanos")
+  const items = applyFilters(UI_STATE.events)
+    .filter(ev => eventMatchesCategoryGroup(ev, categoryId))
     .filter(ev => {
       const iso = String(ev.dateISO || "").trim();
       return iso && iso >= fromISO && iso <= toISO;
@@ -628,23 +640,46 @@ function renderBirthdayBanner() {
       return String(a.title || "").localeCompare(String(b.title || ""), "es");
     });
 
-  if (!birthdays.length) {
-    hide($birthdayBanner);
-    $birthdayBannerList.innerHTML = "";
+  if (!items.length) {
+    hide(bannerEl);
+    listEl.innerHTML = "";
     return;
   }
 
-  $birthdayBannerList.innerHTML = birthdays.map(ev => {
+  listEl.innerHTML = items.map(ev => {
     const date = formatBirthdayShort(ev.dateISO);
     return `
       <div class="birthday-banner-item">
         <span class="birthday-banner-date">${escapeHtml(date)}</span>
-        <span>${escapeHtml(ev.title || "Cumpleaños")}</span>
+        <span>${escapeHtml(ev.title || fallbackTitle)}</span>
       </div>
     `;
   }).join("");
 
-  show($birthdayBanner);
+  show(bannerEl);
+}
+
+function eventMatchesCategoryGroup(ev, categoryId) {
+  const rawId = String(ev?.category || "").trim().toLowerCase();
+  const label = String(catLabel(ev?.category || "") || "").trim().toLowerCase();
+  const normalizedLabel = label
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (categoryId === "cumpleanos") {
+    return rawId === "cumpleanos" || normalizedLabel.includes("cumpleanos");
+  }
+
+  if (categoryId === "festividades") {
+    return (
+      rawId === "festividades" ||
+      rawId === "festividad" ||
+      normalizedLabel.includes("festividades") ||
+      normalizedLabel.includes("festividad")
+    );
+  }
+
+  return rawId === String(categoryId || "").trim().toLowerCase();
 }
 
 function formatBirthdayShort(dateISO) {
