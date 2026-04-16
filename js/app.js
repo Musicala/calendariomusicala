@@ -118,6 +118,28 @@ async function handleCreate(payload) {
   }
 }
 
+export async function materializeRecurringOccurrence(virtualEvent, patch = {}) {
+  if (!virtualEvent?._virtualFromId) throw new Error("La ocurrencia no es recurrente.");
+
+  requireSession();
+  requireWrite();
+
+  const payload = {
+    title: virtualEvent.title || "",
+    category: virtualEvent.category || "otro",
+    dateISO: virtualEvent.dateISO || "",
+    status: virtualEvent.status || "pending",
+    notes: virtualEvent.notes || "",
+    assignedTo: virtualEvent.assignedTo || "",
+    recurrence: null,
+    recurrenceParentId: virtualEvent._virtualFromId,
+    ...patch,
+    dateISO: patch.dateISO || virtualEvent.dateISO || ""
+  };
+
+  return createEvent(payload, USER_EMAIL);
+}
+
 async function handleUpdate(id, payload) {
   try {
     requireSession();
@@ -151,6 +173,16 @@ function handleNavigate({ year, monthIndex }) {
   subscribeMonth(year, monthIndex);
 }
 
+async function handleMaterializeOccurrence(virtualEvent, patch = {}) {
+  try {
+    await materializeRecurringOccurrence(virtualEvent, patch);
+    toast("Ocurrencia separada ✅");
+  } catch (e) {
+    console.error("Materialize occurrence error:", e);
+    alert(e?.message || "No se pudo separar esta ocurrencia.");
+  }
+}
+
 /* =========================
    Init UI una sola vez
 ========================= */
@@ -161,7 +193,8 @@ function ensureUI() {
     onNavigate: handleNavigate,
     onCreate: handleCreate,
     onUpdate: handleUpdate,
-    onDelete: handleDelete
+    onDelete: handleDelete,
+    onMaterializeOccurrence: handleMaterializeOccurrence
   });
 
   uiInitialized = true;

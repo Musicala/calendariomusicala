@@ -102,6 +102,11 @@ const $eventRecurrence = qs("#eventRecurrence");
 
 const $toastHost = qs("#toastHost");
 
+let $eventHoverCard = null;
+let hoverShowTimer = null;
+let hoverHideTimer = null;
+let hoverAnchorEl = null;
+
 /* =========================
    Config UI
 ========================= */
@@ -132,6 +137,7 @@ let UI_STATE = {
   view: "month", // "month" | "list"
 
   editingId: null,
+  modalSourceOccurrence: null,
 
   // Permissions (client-side)
   canWrite: true,
@@ -141,6 +147,7 @@ let UI_STATE = {
   onCreate: null,
   onUpdate: null,
   onDelete: null,
+  onMaterializeOccurrence: null,
 
   _initialized: false,
   _globalKeysBound: false
@@ -297,11 +304,12 @@ function getEventDateDayOfMonth() {
 /* =========================
    Init
 ========================= */
-export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
+export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterializeOccurrence } = {}) {
   UI_STATE.onNavigate = onNavigate || null;
   UI_STATE.onCreate   = onCreate   || null;
   UI_STATE.onUpdate   = onUpdate   || null;
   UI_STATE.onDelete   = onDelete   || null;
+  UI_STATE.onMaterializeOccurrence = onMaterializeOccurrence || null;
 
   UI_STATE.categories = getCategories();
   rebuildCategoryMap();
@@ -314,6 +322,7 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
 
   populateRecurrenceSelect();
   ensureRecurrenceSectionUI();
+  ensureHoverCard();
 
   populateAssignedSelect([]);
   populateAssignedToModal([]);
@@ -399,22 +408,7 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
         quickToggleDone(id);
         return;
       }
-
-      const chip = e.target.closest("[data-event-id]");
-      if (chip) {
-        const id = chip.getAttribute("data-event-id");
-        const ev = UI_STATE.events.find(x => x.id === id);
-        if (ev && ev._virtualFromId) {
-          if (!UI_STATE.canWrite) {
-            notify("Modo solo lectura: no puedes crear desde una ocurrencia.", { mode: "toast" });
-            return;
-          }
-          openModalForNew(ev.dateISO, ev);
-          return;
-        }
-        if (ev) openModalForEdit(ev);
-        return;
-      }
+      if (handleEventOpenClick(e.target)) return;
 
       const dayCell = e.target.closest("[data-date]");
       if (dayCell) {
@@ -440,22 +434,7 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
         quickToggleDone(id);
         return;
       }
-
-      const row = e.target.closest("[data-event-id]");
-      if (!row) return;
-      const id = row.getAttribute("data-event-id");
-      const ev = UI_STATE.events.find(x => x.id === id);
-      if (!ev) return;
-
-      if (ev._virtualFromId) {
-        if (!UI_STATE.canWrite) {
-          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-          return;
-        }
-        openModalForNew(ev.dateISO, ev);
-      } else {
-        openModalForEdit(ev);
-      }
+      handleEventOpenClick(e.target);
     });
 
     const ovClick = (e) => {
@@ -471,22 +450,7 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete } = {}) {
         quickToggleDone(id);
         return;
       }
-
-      const btn = e.target.closest("[data-event-id]");
-      if (!btn) return;
-      const id = btn.getAttribute("data-event-id");
-      const ev = UI_STATE.events.find(x => x.id === id);
-      if (!ev) return;
-
-      if (ev._virtualFromId) {
-        if (!UI_STATE.canWrite) {
-          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-          return;
-        }
-        openModalForNew(ev.dateISO, ev);
-      } else {
-        openModalForEdit(ev);
-      }
+      handleEventOpenClick(e.target);
     };
     $todayList?.addEventListener("click", ovClick);
     $nextList?.addEventListener("click", ovClick);
@@ -628,6 +592,68 @@ function rerender() {
   if (UI_STATE.view === "list") renderList(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
 }
 
+function findVisibleEventById(eventId) {
+  const id = String(eventId || "").trim();
+  if (!id) return null;
+  return UI_STATE.events.find(ev => String(ev.id) === id) || null;
+}
+
+function resolveEventFromTarget(target) {
+  const trigger = target?.closest?.("[data-event-id]");
+  if (!trigger) return { trigger: null, event: null };
+  const eventId = trigger.getAttribute("data-event-id");
+  return { trigger, event: findVisibleEventById(eventId) };
+}
+
+function handleEventOpenClick(target) {
+  const { event: ev } = resolveEventFromTarget(target);
+  if (!ev) return false;
+
+  if (ev._virtualFromId) {
+    if (!UI_STATE.canWrite) {
+      notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
+      return true;
+    }
+    openModalForNew(ev.dateISO, ev);
+    return true;
+  }
+
+  openModalForEdit(ev);
+  return true;
+}
+
+function buildHoverCardData(ev) {
+  const st = ev.status || "pending";
+  const cat = ev.category || "otro";
+  const who = String(ev.assignedTo || "").trim();
+  const rec = recurrenceLabel(ev.recurrence);
+  const date = String(ev.dateISO || "").trim();
+  const notes = String(ev.notes || "").trim();
+
+  return {
+    title: ev.title || "(Sin título)",
+    meta: [
+      catLabel(cat),
+      statusLabel(st),
+      date,
+      rec,
+      ev._virtualFromId ? "Serie recurrente" : ""
+    ].filter(Boolean).join(" · "),
+    extra: who ? `Responsable: ${who}` : "",
+    notes: notes ? notes.slice(0, 180) : ""
+  };
+}
+
+function applyHoverCardAttrs(el, ev) {
+  if (!el || !ev) return;
+  const info = buildHoverCardData(ev);
+  el.removeAttribute("title");
+  el.dataset.hoverTitle = info.title;
+  el.dataset.hoverMeta = info.meta;
+  el.dataset.hoverExtra = info.extra;
+  el.dataset.hoverNotes = info.notes;
+}
+
 /* =========================
    Render principal (Mes)
 ========================= */
@@ -744,6 +770,7 @@ function renderList(year, monthIndex, events = []) {
     row.type = "button";
     row.className = "list-item";
     row.setAttribute("data-event-id", ev.id);
+    applyHoverCardAttrs(row, ev);
 
     const st = ev.status || "pending";
     const cat = ev.category || "otro";
@@ -842,6 +869,7 @@ function renderMiniOverviewItem(ev, { showDate = false, compact = false } = {}) 
   btn.type = "button";
   btn.className = compact ? "ov-item ov-compact" : "ov-item";
   btn.setAttribute("data-event-id", ev.id);
+  applyHoverCardAttrs(btn, ev);
 
   const cat = ev.category || "otro";
   const who = (ev.assignedTo || "").trim();
@@ -871,6 +899,7 @@ function renderChip(ev) {
   chip.type = "button";
   chip.className = "chip";
   chip.setAttribute("data-event-id", ev.id);
+  applyHoverCardAttrs(chip, ev);
 
   const cat = ev.category || "otro";
   const st  = ev.status || "pending";
@@ -899,16 +928,18 @@ function renderChip(ev) {
     ${check}
   `;
 
+  applyHoverCardAttrs(chip, ev);
   return chip;
 }
 
 function renderQuickToggleHTML(ev, { small = false } = {}) {
-  if (ev?._virtualFromId) return "";
   if (!UI_STATE.canWrite) return "";
 
   const st = ev.status || "pending";
   const isDone = st === "done";
-  const label = isDone ? "Marcar pendiente" : "Marcar hecho";
+  const label = ev?._virtualFromId
+    ? (isDone ? "Separar ocurrencia como pendiente" : "Separar ocurrencia y marcar hecho")
+    : (isDone ? "Marcar pendiente" : "Marcar hecho");
   const cls = small ? "chip-check chip-check-sm" : "chip-check";
 
   return `
@@ -921,7 +952,7 @@ function renderQuickToggleHTML(ev, { small = false } = {}) {
   `;
 }
 
-function quickToggleDone(eventId) {
+async function quickToggleDone(eventId) {
   const id = String(eventId || "").trim();
   if (!id) return;
 
@@ -931,9 +962,23 @@ function quickToggleDone(eventId) {
   }
 
   const raw = UI_STATE.rawEvents.find(e => String(e.id) === id);
-  if (!raw) return;
+  const visible = UI_STATE.events.find(e => String(e.id) === id);
+  const target = raw || visible;
+  if (!target) return;
 
-  const st = raw.status || "pending";
+  if (target._virtualFromId) {
+    const next = (target.status === "done") ? "pending" : "done";
+    try {
+      await UI_STATE.onMaterializeOccurrence?.(target, { status: next });
+      notify(next === "done" ? "Ocurrencia marcada como hecha ✅" : "Ocurrencia creada como pendiente ◻️", { mode: "toast", ms: 1600 });
+    } catch (err) {
+      console.error("quickToggleDone materialize error:", err);
+      notify("No se pudo separar esta ocurrencia.", { mode: "alert" });
+    }
+    return;
+  }
+
+  const st = target.status || "pending";
   if (st === "cancelled") {
     notify("Este evento está cancelado. No lo marco como hecho.", { mode: "toast" });
     return;
@@ -941,7 +986,7 @@ function quickToggleDone(eventId) {
 
   const next = (st === "done") ? "pending" : "done";
 
-  raw.status = next;
+  target.status = next;
   rerender();
 
   UI_STATE.onUpdate?.(id, { status: next });
@@ -961,6 +1006,7 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
   const iso = (dateISO && String(dateISO).trim()) ? String(dateISO).trim() : getSmartDefaultDateISO();
 
   UI_STATE.editingId = null;
+  UI_STATE.modalSourceOccurrence = prefillFromEvent?._virtualFromId ? prefillFromEvent : null;
   if ($modalTitle) $modalTitle.textContent = "Nuevo evento";
 
   const baseCat = (UI_STATE.categories?.[0]?.id) || "otro";
@@ -976,7 +1022,7 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
   if ($eventNotes) $eventNotes.value = prefillFromEvent?.notes ? String(prefillFromEvent.notes) : "";
   if ($eventAssignedTo) $eventAssignedTo.value = prefillFromEvent?.assignedTo ? String(prefillFromEvent.assignedTo) : "";
 
-  setRecurrenceControlsValue(null);
+  setRecurrenceControlsValue(prefillFromEvent?._virtualFromId ? null : prefillFromEvent?.recurrence || null);
 
   hide($btnDeleteEvent);
 
@@ -988,6 +1034,7 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
 
 function openModalForEdit(ev) {
   UI_STATE.editingId = ev.id;
+  UI_STATE.modalSourceOccurrence = null;
   if ($modalTitle) $modalTitle.textContent = "Editar evento";
 
   populateAssignedToModal(UI_STATE.rawEvents, ev.assignedTo || "");
@@ -1021,6 +1068,9 @@ function readModalPayload() {
 
   const assignedTo = ($eventAssignedTo?.value || "").trim();
   const recurrence = readRecurrenceFromModal();
+  const recurrenceParentId = UI_STATE.modalSourceOccurrence?._virtualFromId
+    ? String(UI_STATE.modalSourceOccurrence._virtualFromId)
+    : "";
 
   const problems = [];
   if (!title) problems.push("Ponle un título al evento.");
@@ -1051,7 +1101,7 @@ function readModalPayload() {
     return null;
   }
 
-  return { title, category, dateISO, status, notes, assignedTo, recurrence };
+  return { title, category, dateISO, status, notes, assignedTo, recurrence, recurrenceParentId };
 }
 
 function openModal() {
@@ -1065,6 +1115,118 @@ function closeModal() {
   hide($modalOverlay);
   document.body.classList.remove("modal-open");
   UI_STATE.editingId = null;
+  UI_STATE.modalSourceOccurrence = null;
+}
+
+function ensureHoverCard() {
+  if ($eventHoverCard) return $eventHoverCard;
+
+  const card = document.createElement("div");
+  card.className = "event-hover-card hidden";
+  card.setAttribute("aria-hidden", "true");
+  card.innerHTML = `
+    <div class="event-hover-title" id="eventHoverTitle"></div>
+    <div class="event-hover-meta" id="eventHoverMeta"></div>
+    <div class="event-hover-extra hidden" id="eventHoverExtra"></div>
+    <div class="event-hover-notes hidden" id="eventHoverNotes"></div>
+  `;
+
+  card.addEventListener("mouseenter", () => {
+    if (hoverHideTimer) clearTimeout(hoverHideTimer);
+  });
+  card.addEventListener("mouseleave", () => scheduleHideHoverCard());
+
+  document.body.appendChild(card);
+  $eventHoverCard = card;
+
+  document.addEventListener("mouseover", handleHoverIntentStart);
+  document.addEventListener("focusin", handleHoverIntentStart);
+  document.addEventListener("mouseout", handleHoverIntentEnd);
+  document.addEventListener("focusout", handleHoverIntentEnd);
+  window.addEventListener("scroll", repositionHoverCard, true);
+  window.addEventListener("resize", repositionHoverCard);
+
+  return card;
+}
+
+function handleHoverIntentStart(event) {
+  const trigger = event.target?.closest?.("[data-hover-title]");
+  if (!trigger) return;
+
+  if (hoverShowTimer) clearTimeout(hoverShowTimer);
+  if (hoverHideTimer) clearTimeout(hoverHideTimer);
+  hoverAnchorEl = trigger;
+
+  const delay = event.type === "focusin" ? 150 : 900;
+  hoverShowTimer = setTimeout(() => showHoverCard(trigger), delay);
+}
+
+function handleHoverIntentEnd(event) {
+  const related = event.relatedTarget;
+  if (related && (related.closest?.(".event-hover-card") || related.closest?.("[data-hover-title]"))) return;
+  scheduleHideHoverCard();
+}
+
+function scheduleHideHoverCard() {
+  if (hoverShowTimer) clearTimeout(hoverShowTimer);
+  if (hoverHideTimer) clearTimeout(hoverHideTimer);
+  hoverHideTimer = setTimeout(hideHoverCard, 120);
+}
+
+function showHoverCard(trigger) {
+  ensureHoverCard();
+  if (!$eventHoverCard || !trigger) return;
+
+  hoverAnchorEl = trigger;
+
+  const title = String(trigger.dataset.hoverTitle || "").trim();
+  const meta = String(trigger.dataset.hoverMeta || "").trim();
+  const extra = String(trigger.dataset.hoverExtra || "").trim();
+  const notes = String(trigger.dataset.hoverNotes || "").trim();
+
+  $eventHoverCard.querySelector("#eventHoverTitle").textContent = title;
+  $eventHoverCard.querySelector("#eventHoverMeta").textContent = meta;
+
+  const $extra = $eventHoverCard.querySelector("#eventHoverExtra");
+  const $notes = $eventHoverCard.querySelector("#eventHoverNotes");
+  $extra.textContent = extra;
+  $notes.textContent = notes;
+  $extra.classList.toggle("hidden", !extra);
+  $notes.classList.toggle("hidden", !notes);
+
+  $eventHoverCard.classList.remove("hidden");
+  $eventHoverCard.classList.add("visible");
+  $eventHoverCard.setAttribute("aria-hidden", "false");
+  repositionHoverCard();
+}
+
+function repositionHoverCard() {
+  if (!$eventHoverCard || !$eventHoverCard.classList.contains("visible") || !hoverAnchorEl) return;
+
+  const rect = hoverAnchorEl.getBoundingClientRect();
+  const cardRect = $eventHoverCard.getBoundingClientRect();
+  const gap = 10;
+  const maxLeft = Math.max(8, window.innerWidth - cardRect.width - 8);
+
+  let top = rect.bottom + gap;
+  let left = rect.left;
+
+  if (top + cardRect.height > window.innerHeight - 8) {
+    top = Math.max(8, rect.top - cardRect.height - gap);
+  }
+
+  left = Math.min(Math.max(8, left), maxLeft);
+
+  $eventHoverCard.style.top = `${top + window.scrollY}px`;
+  $eventHoverCard.style.left = `${left + window.scrollX}px`;
+}
+
+function hideHoverCard() {
+  if (!$eventHoverCard) return;
+  $eventHoverCard.classList.remove("visible");
+  $eventHoverCard.classList.add("hidden");
+  $eventHoverCard.setAttribute("aria-hidden", "true");
+  hoverAnchorEl = null;
 }
 
 /* =============================================================================
@@ -1791,20 +1953,25 @@ function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
   const out = [];
 
   for (const ev of events) {
-    out.push(ev);
-
     const startISO = String(ev.dateISO || "").trim();
-    if (!startISO) continue;
-
     const rec = normalizeRecurrence(ev.recurrence);
-    if (!rec) continue;
+    if (rec && startISO) {
+      out.push(...expandInterval(ev, startISO, fromISO, toISO, rec));
+      continue;
+    }
 
-    out.push(...expandInterval(ev, startISO, fromISO, toISO, rec));
+    out.push(ev);
   }
 
   const seen = new Set();
+  const materializedKeys = new Set(
+    events
+      .filter(e => e.recurrenceParentId && e.dateISO)
+      .map(e => `${e.recurrenceParentId}::${e.dateISO}`)
+  );
   const cleaned = [];
   for (const e of out) {
+    if (e._virtualFromId && materializedKeys.has(`${e._virtualFromId}::${e.dateISO || ""}`)) continue;
     const key = `${e.id}::${e.dateISO || ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1822,17 +1989,10 @@ function expandInterval(ev, startISO, fromISO, toISO, rec) {
   const toD   = isoToDate(toISO);
 
   let cur = new Date(startD);
-
   let guard = 0;
-  while (cur < fromD && guard < 5000) {
-    cur = addByRecurrence(cur, rec, startD);
-    guard++;
-  }
-
-  guard = 0;
   while (cur <= toD && guard < 5000) {
     const iso = toISODateLocal(cur);
-    if (iso !== startISO) res.push(makeVirtualOccurrence(ev, iso));
+    if (cur >= fromD) res.push(makeVirtualOccurrence(ev, iso));
     cur = addByRecurrence(cur, rec, startD);
     guard++;
   }
@@ -1890,7 +2050,8 @@ function makeVirtualOccurrence(ev, dateISO) {
     ...ev,
     id: `${ev.id}__v__${dateISO}`,
     dateISO,
-    _virtualFromId: ev.id
+    _virtualFromId: ev.id,
+    recurrenceParentId: ev.id
   };
 }
 
