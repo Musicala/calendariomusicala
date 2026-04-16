@@ -77,6 +77,8 @@ const $listMeta     = qs("#listMeta");
 
 const $todayList = qs("#todayList");
 const $nextList  = qs("#nextList");
+const $birthdayBanner = qs("#birthdayBanner");
+const $birthdayBannerList = qs("#birthdayBannerList");
 
 const $filterCategory   = qs("#filterCategory");
 const $filterStatus     = qs("#filterStatus");
@@ -586,10 +588,72 @@ export function setCatalogData({ categories, assignees, userEmail } = {}) {
 function rerender() {
   UI_STATE.events = expandRecurringForVisibleRange(UI_STATE.rawEvents, UI_STATE.year, UI_STATE.monthIndex);
 
+  renderBirthdayBanner();
   renderOverview();
   renderCalendar(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
 
   if (UI_STATE.view === "list") renderList(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
+}
+
+function renderBirthdayBanner() {
+  if (!$birthdayBanner || !$birthdayBannerList) return;
+
+  const now = new Date();
+  const day = now.getDay(); // 0 dom, 1 lun ... 6 sab
+
+  if (day === 0) {
+    hide($birthdayBanner);
+    $birthdayBannerList.innerHTML = "";
+    return;
+  }
+
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(now.getDate() - (day - 1));
+
+  const saturday = new Date(monday);
+  saturday.setDate(monday.getDate() + 5);
+  const fromISO = toISODateLocal(monday);
+  const toISO = toISODateLocal(saturday);
+
+  const birthdays = applyFilters(UI_STATE.events)
+    .filter(ev => String(ev.category || "").trim() === "cumpleanos")
+    .filter(ev => {
+      const iso = String(ev.dateISO || "").trim();
+      return iso && iso >= fromISO && iso <= toISO;
+    })
+    .slice()
+    .sort((a, b) => {
+      if (a.dateISO !== b.dateISO) return String(a.dateISO || "").localeCompare(String(b.dateISO || ""));
+      return String(a.title || "").localeCompare(String(b.title || ""), "es");
+    });
+
+  if (!birthdays.length) {
+    hide($birthdayBanner);
+    $birthdayBannerList.innerHTML = "";
+    return;
+  }
+
+  $birthdayBannerList.innerHTML = birthdays.map(ev => {
+    const date = formatBirthdayShort(ev.dateISO);
+    return `
+      <div class="birthday-banner-item">
+        <span class="birthday-banner-date">${escapeHtml(date)}</span>
+        <span>${escapeHtml(ev.title || "Cumpleaños")}</span>
+      </div>
+    `;
+  }).join("");
+
+  show($birthdayBanner);
+}
+
+function formatBirthdayShort(dateISO) {
+  const d = isoToDate(dateISO);
+  return d.toLocaleDateString("es-CO", {
+    weekday: "short",
+    day: "numeric",
+    month: "short"
+  });
 }
 
 function findVisibleEventById(eventId) {
