@@ -370,10 +370,23 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterialize
     $btnCancelModal?.addEventListener("click", closeModal);
     $modalOverlay?.addEventListener("click", closeModal);
 
-    $btnDeleteEvent?.addEventListener("click", (e) => {
+    $btnDeleteEvent?.addEventListener("click", async (e) => {
       e.preventDefault();
       if (!UI_STATE.canWrite) {
         notify("Modo solo lectura: no puedes eliminar.", { mode: "toast" });
+        return;
+      }
+      const occurrence = UI_STATE.modalSourceOccurrence;
+      if (occurrence?._virtualFromId) {
+        const ok = confirm("¿Eliminar solo esta ocurrencia recurrente?");
+        if (!ok) return;
+        try {
+          await UI_STATE.onMaterializeOccurrence?.(occurrence, { recurrenceSkip: true });
+          closeModal();
+        } catch (err) {
+          console.error("Delete occurrence error:", err);
+          notify("No se pudo eliminar esta ocurrencia.", { mode: "alert" });
+        }
         return;
       }
       const id = UI_STATE.editingId;
@@ -613,20 +626,14 @@ function renderWeeklyCategoryBanner({ bannerEl, listEl, categoryId, fallbackTitl
   const now = new Date();
   const day = now.getDay(); // 0 dom, 1 lun ... 6 sab
 
-  if (day === 0) {
-    hide(bannerEl);
-    listEl.innerHTML = "";
-    return;
-  }
-
   const monday = new Date(now);
   monday.setHours(0, 0, 0, 0);
-  monday.setDate(now.getDate() - (day - 1));
+  monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
 
-  const saturday = new Date(monday);
-  saturday.setDate(monday.getDate() + 5);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
   const fromISO = toISODateLocal(monday);
-  const toISO = toISODateLocal(saturday);
+  const toISO = toISODateLocal(sunday);
 
   const items = applyFilters(UI_STATE.events)
     .filter(ev => eventMatchesCategoryGroup(ev, categoryId))
@@ -1106,7 +1113,7 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
 
   UI_STATE.editingId = null;
   UI_STATE.modalSourceOccurrence = prefillFromEvent?._virtualFromId ? prefillFromEvent : null;
-  if ($modalTitle) $modalTitle.textContent = "Nuevo evento";
+  if ($modalTitle) $modalTitle.textContent = UI_STATE.modalSourceOccurrence ? "Editar ocurrencia" : "Nuevo evento";
 
   const baseCat = (UI_STATE.categories?.[0]?.id) || "otro";
 
@@ -1123,7 +1130,8 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
 
   setRecurrenceControlsValue(prefillFromEvent?._virtualFromId ? null : prefillFromEvent?.recurrence || null);
 
-  hide($btnDeleteEvent);
+  if (UI_STATE.canWrite && UI_STATE.modalSourceOccurrence) show($btnDeleteEvent);
+  else hide($btnDeleteEvent);
 
   openModal();
   ensureModalEnhancements();
@@ -2052,6 +2060,8 @@ function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
   const out = [];
 
   for (const ev of events) {
+    if (ev?.recurrenceSkip) continue;
+
     const startISO = String(ev.dateISO || "").trim();
     const rec = normalizeRecurrence(ev.recurrence);
     if (rec && startISO) {

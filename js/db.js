@@ -364,6 +364,13 @@ function extractRecurrenceParentId(input = {}, fallback = {}) {
   return cleanString(raw, "");
 }
 
+function extractRecurrenceSkip(input = {}, fallback = {}) {
+  if ("recurrenceSkip" in input) return !!input.recurrenceSkip;
+  if ("skipRecurrence" in input) return !!input.skipRecurrence;
+  if ("recurrenceSkip" in fallback) return !!fallback.recurrenceSkip;
+  return false;
+}
+
 function extractDateISO(input = {}, fallback = {}) {
   const raw =
     input.dateISO ?? input.date ?? input.dateStr ?? input.eventDate ??
@@ -380,13 +387,14 @@ function normalizeEventInputStrict(input = {}) {
   const assignedTo = extractAssignedTo(input, {});
   const recurrence = extractRecurrence(input, {});
   const recurrenceParentId = extractRecurrenceParentId(input, {});
+  const recurrenceSkip = extractRecurrenceSkip(input, {});
 
   if (!title)   throw new Error("El título es obligatorio.");
   if (!category) throw new Error("La categoría es obligatoria.");
   if (!dateISO)  throw new Error("La fecha es obligatoria.");
   if (!isValidISODate(dateISO)) throw new Error("Fecha inválida. Usa yyyy-mm-dd.");
 
-  return { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId };
+  return { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceSkip };
 }
 
 function normalizeEventInputTolerant(input = {}, fallback = {}) {
@@ -398,13 +406,14 @@ function normalizeEventInputTolerant(input = {}, fallback = {}) {
   const assignedTo = extractAssignedTo(input, fallback);
   const recurrence = extractRecurrence(input, fallback);
   const recurrenceParentId = extractRecurrenceParentId(input, fallback);
+  const recurrenceSkip = extractRecurrenceSkip(input, fallback);
 
   if (!title)   throw new Error("El título es obligatorio.");
   if (!category) throw new Error("La categoría es obligatoria.");
   if (!dateISO)  throw new Error("La fecha es obligatoria.");
   if (!isValidISODate(dateISO)) throw new Error("Fecha inválida. Usa yyyy-mm-dd.");
 
-  return { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId };
+  return { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceSkip };
 }
 
 function normalizePartialPatch(input = {}, existing = {}) {
@@ -445,6 +454,9 @@ function normalizePartialPatch(input = {}, existing = {}) {
   if ("recurrenceParentId" in input || "seriesParentId" in input || "parentEventId" in input) {
     patch.recurrenceParentId = extractRecurrenceParentId(input, existing) || null;
   }
+  if ("recurrenceSkip" in input || "skipRecurrence" in input) {
+    patch.recurrenceSkip = extractRecurrenceSkip(input, existing);
+  }
 
   return patch;
 }
@@ -453,7 +465,7 @@ function normalizePartialPatch(input = {}, existing = {}) {
    CREATE
 ========================= */
 export async function createEvent(input, userEmail) {
-  const { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId } =
+  const { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceSkip } =
     normalizeEventInputStrict(input);
 
   const email = cleanString(userEmail, "");
@@ -462,6 +474,7 @@ export async function createEvent(input, userEmail) {
     title, category, status, notes, assignedTo,
     recurrence:        recurrence || null,
     recurrenceParentId: recurrenceParentId || null,
+    recurrenceSkip:    !!recurrenceSkip,
     recurrenceLegacy:  recurrenceToLegacyString(recurrence),
     dateStart:         dateISOToTimestamp(dateISO),
     dateISO,
@@ -500,7 +513,9 @@ export async function updateEvent(eventId, input, userEmail) {
     "assigned" in (input || {}) || "eventAssignedTo" in (input || {}) || "eventAssignee" in (input || {}) ||
     "dateISO" in (input || {}) || "date" in (input || {}) || "dateStr" in (input || {}) ||
     "eventDate" in (input || {}) || "recurrence" in (input || {}) || "repeat" in (input || {}) ||
-    "repetition" in (input || {}) || "eventRecurrence" in (input || {}) || "eventRepeat" in (input || {});
+    "repetition" in (input || {}) || "eventRecurrence" in (input || {}) || "eventRepeat" in (input || {}) ||
+    "recurrenceParentId" in (input || {}) || "seriesParentId" in (input || {}) || "parentEventId" in (input || {}) ||
+    "recurrenceSkip" in (input || {}) || "skipRecurrence" in (input || {});
 
   if (hasKnownPatchField) {
     patch = normalizePartialPatch(input, existing);
@@ -512,6 +527,7 @@ export async function updateEvent(eventId, input, userEmail) {
       assignedTo: normalized.assignedTo,
       recurrence: normalized.recurrence || null,
       recurrenceParentId: normalized.recurrenceParentId || null,
+      recurrenceSkip: normalized.recurrenceSkip,
       recurrenceLegacy: recurrenceToLegacyString(normalized.recurrence),
       dateISO: normalized.dateISO,
       dateStart: dateISOToTimestamp(normalized.dateISO)
@@ -526,7 +542,8 @@ export async function updateEvent(eventId, input, userEmail) {
     ("dateISO"    in patch && !sameValue(existing.dateISO,    patch.dateISO))    ||
     ("assignedTo" in patch && !sameValue(existing.assignedTo, patch.assignedTo)) ||
     ("recurrence" in patch && !sameValue(existing.recurrence, patch.recurrence)) ||
-    ("recurrenceParentId" in patch && !sameValue(existing.recurrenceParentId, patch.recurrenceParentId));
+    ("recurrenceParentId" in patch && !sameValue(existing.recurrenceParentId, patch.recurrenceParentId)) ||
+    ("recurrenceSkip" in patch && !sameValue(existing.recurrenceSkip, patch.recurrenceSkip));
 
   if (!changed) return { id, ...existing, _skipped: true };
 
@@ -757,6 +774,7 @@ function mapEventDoc(docSnap) {
     assignedTo:      cleanString(data.assignedTo, ""),
     recurrence,
     recurrenceParentId: cleanString(data.recurrenceParentId, ""),
+    recurrenceSkip: !!data.recurrenceSkip,
     recurrenceLegacy: cleanString(data.recurrenceLegacy, "") || recurrenceToLegacyString(recurrence),
     dateStart,
     dateISO,

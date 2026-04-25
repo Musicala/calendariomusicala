@@ -133,6 +133,7 @@ export async function materializeRecurringOccurrence(virtualEvent, patch = {}) {
     assignedTo: virtualEvent.assignedTo || "",
     recurrence: null,
     recurrenceParentId: virtualEvent._virtualFromId,
+    recurrenceSkip: false,
     ...patch,
     dateISO: patch.dateISO || virtualEvent.dateISO || ""
   };
