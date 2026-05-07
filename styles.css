@@ -458,7 +458,7 @@ a:hover{
 .overview{
   margin-top: var(--gap);
   display:grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: var(--gap);
 }
 
@@ -492,6 +492,19 @@ a:hover{
   margin-bottom:8px;
 }
 
+.overview-title-row{
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:8px;
+}
+
+.overview-title-row .overview-title{
+  margin-bottom:0;
+}
+
 .overview-body{
   position:relative;
   display:flex;
@@ -499,6 +512,47 @@ a:hover{
   gap:8px;
   min-height:44px;
   color:var(--ink);
+}
+
+.urgent-task{
+  border:1px solid rgba(15,23,42,.10);
+  background: rgba(255,255,255,.80);
+  border-radius:14px;
+  padding:10px;
+}
+
+.urgent-task-title{
+  font-weight:950;
+  font-size:13px;
+  line-height:1.25;
+  color:var(--ink);
+  overflow-wrap:anywhere;
+}
+
+.urgent-task-desc{
+  margin-top:4px;
+  font-size:12px;
+  line-height:1.35;
+  color:var(--muted);
+  overflow-wrap:anywhere;
+}
+
+.urgent-task-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-top:8px;
+}
+
+.urgent-task-action{
+  min-height:30px;
+  padding:6px 8px;
+  font-size:11px;
+  border-radius:9px;
+}
+
+.urgent-modal-card{
+  width:min(520px, 100%);
 }
 
 .ov-item{
@@ -1734,6 +1788,10 @@ select:-webkit-autofill{
    Responsive
 ========================= */
 @media (max-width: 980px){
+  .overview{ grid-template-columns:1fr 1fr; }
+}
+
+@media (max-width: 640px){
   .overview{ grid-template-columns:1fr; }
 }
 

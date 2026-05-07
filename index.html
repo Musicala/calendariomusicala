@@ -209,6 +209,21 @@
 
     <!-- Overview -->
     <section class="overview" aria-label="Resumen">
+      <article class="overview-card overview-card-urgent hidden" id="overviewUrgent" aria-labelledby="overviewUrgentTitle">
+        <div class="overview-title-row">
+          <h3 class="overview-title" id="overviewUrgentTitle">Tareas urgentes</h3>
+          <button type="button" class="btn tiny ghost" id="btnAddUrgentTask">Agregar</button>
+        </div>
+        <div
+          class="overview-body"
+          id="urgentList"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span class="muted">Sin tareas urgentes</span>
+        </div>
+      </article>
+
       <article class="overview-card" id="overviewToday" aria-labelledby="overviewTodayTitle">
         <h3 class="overview-title" id="overviewTodayTitle">Hoy</h3>
         <div
