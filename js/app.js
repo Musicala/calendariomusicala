@@ -30,7 +30,7 @@ let CAN_WRITE = false;             // permisos derivados
 let ALLOWED_CATEGORIES = [];       // categorías permitidas para queries
 
 let unsubMonth = null;             // unsubscribe del onSnapshot
-let unsubUrgentTasks = null;       // unsubscribe tareas urgentes personales
+let unsubUrgentTasks = null;       // unsubscribe tareas urgentes compartidas
 let CURRENT_URGENT_TASKS = [];
 let uiInitialized = false;
 let catalogsLoaded = false;
@@ -78,7 +78,11 @@ function toast(msg) {
 }
 
 function activeUrgentTasks() {
-  return CURRENT_URGENT_TASKS.filter(task => String(task.status || "pending") !== "done");
+  const uid = CURRENT_USER?.uid || "";
+  return CURRENT_URGENT_TASKS.filter(task =>
+    task.ownerUid === uid &&
+    String(task.status || "pending") !== "done"
+  );
 }
 
 function firstFreeUrgentSlot() {

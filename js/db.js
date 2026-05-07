@@ -29,6 +29,7 @@ import {
   setDoc,
   getDocs,
   deleteDoc,
+  collectionGroup,
   query,
   where,
   orderBy,
@@ -195,14 +196,21 @@ export function subscribeUrgentTasks(uid, onData, onError) {
   const cleanUid = cleanString(uid, "");
   if (!cleanUid) throw new Error("uid requerido.");
 
-  const colRef = collection(db, USERS_COL, cleanUid, "urgentTasks");
+  const colRef = collectionGroup(db, "urgentTasks");
   return onSnapshot(
     colRef,
     (snap) => {
       const tasks = snap.docs
         .map(mapUrgentTaskDoc)
         .filter(task => URGENT_SLOT_SET.has(task.slotId))
-        .sort((a, b) => URGENT_TASK_SLOTS.indexOf(a.slotId) - URGENT_TASK_SLOTS.indexOf(b.slotId));
+        .sort((a, b) => {
+          const aOwn = a.ownerUid === cleanUid ? 0 : 1;
+          const bOwn = b.ownerUid === cleanUid ? 0 : 1;
+          if (aOwn !== bOwn) return aOwn - bOwn;
+          if (a.status !== b.status) return String(a.status || "").localeCompare(String(b.status || ""));
+          return String(a.updatedAt?.seconds || a.createdAt?.seconds || 0)
+            .localeCompare(String(b.updatedAt?.seconds || b.createdAt?.seconds || 0));
+        });
       onData?.(tasks);
     },
     (err) => {

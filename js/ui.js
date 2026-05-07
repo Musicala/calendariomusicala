@@ -1014,16 +1014,30 @@ function getActiveUrgentTasks() {
   return (UI_STATE.urgentTasks || [])
     .filter(task => String(task.status || "pending") !== "done")
     .sort((a, b) => URGENT_TASK_SLOTS.indexOf(a.slotId || a.id) - URGENT_TASK_SLOTS.indexOf(b.slotId || b.id))
-    .slice(0, URGENT_TASK_SLOTS.length);
+    .sort((a, b) => {
+      const currentUid = UI_STATE.urgentContext?.uid || "";
+      const aOwn = a.ownerUid === currentUid ? 0 : 1;
+      const bOwn = b.ownerUid === currentUid ? 0 : 1;
+      if (aOwn !== bOwn) return aOwn - bOwn;
+      return String(a.ownerEmail || "").localeCompare(String(b.ownerEmail || ""), "es");
+    });
 }
 
 function getUrgentTaskBySlot(slotId) {
   const id = String(slotId || "");
-  return (UI_STATE.urgentTasks || []).find(task => (task.slotId || task.id) === id) || null;
+  return (UI_STATE.urgentTasks || []).find(task =>
+    (task.slotId || task.id) === id &&
+    task.ownerUid === UI_STATE.urgentContext?.uid
+  ) || null;
+}
+
+function getActiveOwnUrgentTasks() {
+  const uid = UI_STATE.urgentContext?.uid || "";
+  return getActiveUrgentTasks().filter(task => task.ownerUid === uid);
 }
 
 function getFreeUrgentSlot() {
-  const activeSlots = new Set(getActiveUrgentTasks().map(task => task.slotId || task.id));
+  const activeSlots = new Set(getActiveOwnUrgentTasks().map(task => task.slotId || task.id));
   return URGENT_TASK_SLOTS.find(slotId => !activeSlots.has(slotId)) || null;
 }
 
@@ -1040,7 +1054,7 @@ function renderUrgentTasks() {
   }
 
   const active = getActiveUrgentTasks();
-  const isFull = active.length >= URGENT_TASK_SLOTS.length;
+  const isFull = getActiveOwnUrgentTasks().length >= URGENT_TASK_SLOTS.length;
 
   if ($btnAddUrgentTask) {
     $btnAddUrgentTask.disabled = isFull;
@@ -1062,11 +1076,14 @@ function renderUrgentTasks() {
     item.dataset.slotId = task.slotId || task.id || "";
     item.innerHTML = `
       <div class="urgent-task-title">${escapeHtml(task.title || "(Sin titulo)")}</div>
+      ${task.ownerEmail ? `<div class="urgent-task-desc">De ${escapeHtml(task.ownerEmail)}</div>` : ""}
       ${task.description ? `<div class="urgent-task-desc">${escapeHtml(task.description)}</div>` : ""}
       <div class="urgent-task-actions">
-        <button type="button" class="btn tiny ghost urgent-task-action" data-urgent-action="edit">Editar</button>
-        <button type="button" class="btn tiny ghost urgent-task-action" data-urgent-action="complete">Completar</button>
-        <button type="button" class="btn tiny danger urgent-task-action" data-urgent-action="delete">Eliminar</button>
+        ${task.ownerUid === UI_STATE.urgentContext?.uid ? `
+          <button type="button" class="btn tiny ghost urgent-task-action" data-urgent-action="edit">Editar</button>
+          <button type="button" class="btn tiny ghost urgent-task-action" data-urgent-action="complete">Completar</button>
+          <button type="button" class="btn tiny danger urgent-task-action" data-urgent-action="delete">Eliminar</button>
+        ` : ""}
       </div>
     `;
     $urgentList.appendChild(item);
@@ -1080,7 +1097,10 @@ function handleUrgentTaskClick(e) {
   const item = actionBtn.closest("[data-slot-id]");
   const slotId = item?.getAttribute("data-slot-id") || "";
   const action = actionBtn.getAttribute("data-urgent-action");
-  const task = getUrgentTaskBySlot(slotId);
+  const task = (UI_STATE.urgentTasks || []).find(item =>
+    (item.slotId || item.id) === slotId &&
+    item.ownerUid === UI_STATE.urgentContext?.uid
+  ) || null;
   if (!slotId || !task) return;
 
   if (action === "edit") {
@@ -1103,7 +1123,7 @@ function handleUrgentTaskClick(e) {
 function openUrgentTaskModal(task = null) {
   if (!UI_STATE.urgentContext?.visible) return;
 
-  if (!task && getActiveUrgentTasks().length >= URGENT_TASK_SLOTS.length) {
+  if (!task && getActiveOwnUrgentTasks().length >= URGENT_TASK_SLOTS.length) {
     notify("Solo puedes tener 2 tareas urgentes. Completa o elimina una para agregar otra.", { mode: "toast", ms: 3200 });
     return;
   }
