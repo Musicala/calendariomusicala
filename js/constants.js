@@ -95,6 +95,21 @@ export const USER_ROLES = Object.freeze({
   COMUNIDAD:     "comunidad"
 });
 
+export const URGENT_TASK_ROLES = Object.freeze([
+  USER_ROLES.DIRECCION,
+  USER_ROLES.ADMINISTRATIVO,
+  USER_ROLES.COMERCIAL
+]);
+
+export const URGENT_TASK_SLOTS = Object.freeze([
+  "urgent_1",
+  "urgent_2"
+]);
+
+export function canUseUrgentTasks(role) {
+  return URGENT_TASK_ROLES.includes(String(role || "").trim().toLowerCase());
+}
+
 /* =============================================================================
    PERMISOS POR ROL — FUENTE CENTRAL DE VERDAD
    ─────────────────────────────────────────────

@@ -11,8 +11,9 @@
       ✅ filtra consultas por allowedCategories (RBAC cliente)
 ============================================================================= */
 
-import { initUI, setEvents, setMonth, getCurrentView, setCatalogData } from "./ui.js";
-import { createEvent, updateEvent, softDeleteEvent, subscribeEventsInRange, getCatalogSettings } from "./db.js";
+import { initUI, setEvents, setMonth, getCurrentView, setCatalogData, setUrgentTaskContext, setUrgentTasks } from "./ui.js";
+import { createEvent, updateEvent, softDeleteEvent, subscribeEventsInRange, getCatalogSettings, subscribeUrgentTasks, upsertUrgentTask, completeUrgentTask, deleteUrgentTask } from "./db.js";
+import { canUseUrgentTasks, URGENT_TASK_SLOTS } from "./constants.js";
 import { startOfMonth, endOfMonth } from "./utils.js";
 
 // Para que repeticiones aparezcan en meses futuros,
@@ -29,6 +30,8 @@ let CAN_WRITE = false;             // permisos derivados
 let ALLOWED_CATEGORIES = [];       // categorías permitidas para queries
 
 let unsubMonth = null;             // unsubscribe del onSnapshot
+let unsubUrgentTasks = null;       // unsubscribe tareas urgentes personales
+let CURRENT_URGENT_TASKS = [];
 let uiInitialized = false;
 let catalogsLoaded = false;
 
@@ -38,6 +41,12 @@ let catalogsLoaded = false;
 function safeUnsub() {
   try { unsubMonth?.(); } catch (_) {}
   unsubMonth = null;
+}
+
+function safeUnsubUrgentTasks() {
+  try { unsubUrgentTasks?.(); } catch (_) {}
+  unsubUrgentTasks = null;
+  CURRENT_URGENT_TASKS = [];
 }
 
 function monthRange(year, monthIndex) {
@@ -56,9 +65,25 @@ function requireWrite() {
   if (!CAN_WRITE) throw new Error("Tu usuario está en modo solo lectura.");
 }
 
+function requireUrgentAccess() {
+  requireSession();
+  if (!canUseUrgentTasks(USER_ROLE)) {
+    throw new Error("Tu rol no tiene acceso a tareas urgentes.");
+  }
+}
+
 function toast(msg) {
   // Minimalista por ahora
   console.log(msg);
+}
+
+function activeUrgentTasks() {
+  return CURRENT_URGENT_TASKS.filter(task => String(task.status || "pending") !== "done");
+}
+
+function firstFreeUrgentSlot() {
+  const activeSlots = new Set(activeUrgentTasks().map(task => task.slotId || task.id));
+  return URGENT_TASK_SLOTS.find(slotId => !activeSlots.has(slotId)) || null;
 }
 
 /* =========================
@@ -170,6 +195,62 @@ async function handleDelete(id) {
   }
 }
 
+async function handleCreateUrgentTask(payload) {
+  try {
+    requireUrgentAccess();
+
+    if (activeUrgentTasks().length >= URGENT_TASK_SLOTS.length) {
+      alert("Solo puedes tener 2 tareas urgentes. Completa o elimina una para agregar otra.");
+      return;
+    }
+
+    const slotId = firstFreeUrgentSlot();
+    if (!slotId) {
+      alert("Solo puedes tener 2 tareas urgentes. Completa o elimina una para agregar otra.");
+      return;
+    }
+
+    await upsertUrgentTask(CURRENT_USER.uid, slotId, payload, USER_EMAIL);
+    toast("Tarea urgente guardada");
+  } catch (e) {
+    console.error("Create urgent task error:", e);
+    alert(e?.message || "No se pudo guardar la tarea urgente.");
+  }
+}
+
+async function handleUpdateUrgentTask(slotId, payload) {
+  try {
+    requireUrgentAccess();
+    await upsertUrgentTask(CURRENT_USER.uid, slotId, payload, USER_EMAIL);
+    toast("Tarea urgente actualizada");
+  } catch (e) {
+    console.error("Update urgent task error:", e);
+    alert(e?.message || "No se pudo actualizar la tarea urgente.");
+  }
+}
+
+async function handleCompleteUrgentTask(slotId) {
+  try {
+    requireUrgentAccess();
+    await completeUrgentTask(CURRENT_USER.uid, slotId, USER_EMAIL);
+    toast("Tarea urgente completada");
+  } catch (e) {
+    console.error("Complete urgent task error:", e);
+    alert(e?.message || "No se pudo completar la tarea urgente.");
+  }
+}
+
+async function handleDeleteUrgentTask(slotId) {
+  try {
+    requireUrgentAccess();
+    await deleteUrgentTask(CURRENT_USER.uid, slotId);
+    toast("Tarea urgente eliminada");
+  } catch (e) {
+    console.error("Delete urgent task error:", e);
+    alert(e?.message || "No se pudo eliminar la tarea urgente.");
+  }
+}
+
 function handleNavigate({ year, monthIndex }) {
   subscribeMonth(year, monthIndex);
 }
@@ -195,7 +276,11 @@ function ensureUI() {
     onCreate: handleCreate,
     onUpdate: handleUpdate,
     onDelete: handleDelete,
-    onMaterializeOccurrence: handleMaterializeOccurrence
+    onMaterializeOccurrence: handleMaterializeOccurrence,
+    onCreateUrgentTask: handleCreateUrgentTask,
+    onUpdateUrgentTask: handleUpdateUrgentTask,
+    onCompleteUrgentTask: handleCompleteUrgentTask,
+    onDeleteUrgentTask: handleDeleteUrgentTask
   });
 
   uiInitialized = true;
@@ -218,6 +303,9 @@ window.addEventListener("auth:changed", (ev) => {
     catalogsLoaded = false;
 
     safeUnsub();
+    safeUnsubUrgentTasks();
+    setUrgentTaskContext({ visible: false, role: null, uid: "", email: "" });
+    setUrgentTasks([]);
     // UI ya queda escondida desde auth.js
     return;
   }
@@ -238,6 +326,25 @@ window.addEventListener("auth:changed", (ev) => {
   const { year, monthIndex } = getCurrentView();
   setMonth(year, monthIndex);
   subscribeMonth(year, monthIndex);
+
+  safeUnsubUrgentTasks();
+  if (canUseUrgentTasks(USER_ROLE)) {
+    setUrgentTaskContext({ visible: true, role: USER_ROLE, uid: CURRENT_USER.uid, email: USER_EMAIL });
+    unsubUrgentTasks = subscribeUrgentTasks(
+      CURRENT_USER.uid,
+      (tasks) => {
+        CURRENT_URGENT_TASKS = Array.isArray(tasks) ? tasks : [];
+        setUrgentTasks(CURRENT_URGENT_TASKS);
+      },
+      (err) => {
+        console.error(err);
+        alert("No se pudieron cargar las tareas urgentes.");
+      }
+    );
+  } else {
+    setUrgentTaskContext({ visible: false, role: USER_ROLE, uid: CURRENT_USER.uid, email: USER_EMAIL });
+    setUrgentTasks([]);
+  }
 
   // Opcional: log útil para debug
   console.log("[auth] role:", USER_ROLE, "canWrite:", CAN_WRITE, "cats:", ALLOWED_CATEGORIES);

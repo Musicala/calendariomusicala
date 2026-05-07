@@ -42,7 +42,8 @@ import {
   EVENT_STATUS,
   STATUS_COLORS,
   CALENDAR_CONFIG,
-  ASSIGNEES
+  ASSIGNEES,
+  URGENT_TASK_SLOTS
 } from "./constants.js";
 import { saveCatalogSettings } from "./db.js";
 
@@ -77,6 +78,9 @@ const $listMeta     = qs("#listMeta");
 
 const $todayList = qs("#todayList");
 const $nextList  = qs("#nextList");
+const $overviewUrgent = qs("#overviewUrgent");
+const $urgentList = qs("#urgentList");
+const $btnAddUrgentTask = qs("#btnAddUrgentTask");
 const $birthdayBanner = qs("#birthdayBanner");
 const $birthdayBannerList = qs("#birthdayBannerList");
 const $festivityBanner = qs("#festivityBanner");
@@ -152,6 +156,13 @@ let UI_STATE = {
   onUpdate: null,
   onDelete: null,
   onMaterializeOccurrence: null,
+  onCreateUrgentTask: null,
+  onUpdateUrgentTask: null,
+  onCompleteUrgentTask: null,
+  onDeleteUrgentTask: null,
+
+  urgentContext: { visible: false, role: null, uid: "", email: "" },
+  urgentTasks: [],
 
   _initialized: false,
   _globalKeysBound: false
@@ -308,12 +319,16 @@ function getEventDateDayOfMonth() {
 /* =========================
    Init
 ========================= */
-export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterializeOccurrence } = {}) {
+export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterializeOccurrence, onCreateUrgentTask, onUpdateUrgentTask, onCompleteUrgentTask, onDeleteUrgentTask } = {}) {
   UI_STATE.onNavigate = onNavigate || null;
   UI_STATE.onCreate   = onCreate   || null;
   UI_STATE.onUpdate   = onUpdate   || null;
   UI_STATE.onDelete   = onDelete   || null;
   UI_STATE.onMaterializeOccurrence = onMaterializeOccurrence || null;
+  UI_STATE.onCreateUrgentTask = onCreateUrgentTask || null;
+  UI_STATE.onUpdateUrgentTask = onUpdateUrgentTask || null;
+  UI_STATE.onCompleteUrgentTask = onCompleteUrgentTask || null;
+  UI_STATE.onDeleteUrgentTask = onDeleteUrgentTask || null;
 
   UI_STATE.categories = getCategories();
   rebuildCategoryMap();
@@ -472,11 +487,21 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterialize
     $todayList?.addEventListener("click", ovClick);
     $nextList?.addEventListener("click", ovClick);
 
+    $btnAddUrgentTask?.addEventListener("click", () => openUrgentTaskModal());
+    $urgentList?.addEventListener("click", handleUrgentTaskClick);
+
     if (!UI_STATE._globalKeysBound) {
       document.addEventListener("keydown", (e) => {
+        const urgentModalOpen = !!document.getElementById("urgentTaskModal");
         const modalOpen = !$eventModal?.classList.contains("hidden");
         const tag = (e.target?.tagName || "").toLowerCase();
         const typing = ["input","textarea","select"].includes(tag) || e.target?.isContentEditable;
+
+        if (e.key === "Escape" && urgentModalOpen) {
+          e.preventDefault();
+          closeUrgentTaskModal();
+          return;
+        }
 
         if (e.key === "Escape" && modalOpen) {
           e.preventDefault();
@@ -595,6 +620,21 @@ export function setCatalogData({ categories, assignees, userEmail } = {}) {
   }
 
   rerender();
+}
+
+export function setUrgentTaskContext({ visible = false, role = null, uid = "", email = "" } = {}) {
+  UI_STATE.urgentContext = {
+    visible: !!visible,
+    role,
+    uid: String(uid || ""),
+    email: String(email || "")
+  };
+  renderUrgentTasks();
+}
+
+export function setUrgentTasks(tasks = []) {
+  UI_STATE.urgentTasks = Array.isArray(tasks) ? tasks : [];
+  renderUrgentTasks();
 }
 
 /* =========================
@@ -967,6 +1007,189 @@ function renderOverview() {
         $nextList.appendChild(m);
       }
     }
+  }
+}
+
+function getActiveUrgentTasks() {
+  return (UI_STATE.urgentTasks || [])
+    .filter(task => String(task.status || "pending") !== "done")
+    .sort((a, b) => URGENT_TASK_SLOTS.indexOf(a.slotId || a.id) - URGENT_TASK_SLOTS.indexOf(b.slotId || b.id))
+    .slice(0, URGENT_TASK_SLOTS.length);
+}
+
+function getUrgentTaskBySlot(slotId) {
+  const id = String(slotId || "");
+  return (UI_STATE.urgentTasks || []).find(task => (task.slotId || task.id) === id) || null;
+}
+
+function getFreeUrgentSlot() {
+  const activeSlots = new Set(getActiveUrgentTasks().map(task => task.slotId || task.id));
+  return URGENT_TASK_SLOTS.find(slotId => !activeSlots.has(slotId)) || null;
+}
+
+function renderUrgentTasks() {
+  if (!$overviewUrgent || !$urgentList) return;
+
+  const visible = !!UI_STATE.urgentContext?.visible;
+  $overviewUrgent.classList.toggle("hidden", !visible);
+
+  if (!visible) {
+    $urgentList.innerHTML = `<span class="muted">Sin tareas urgentes</span>`;
+    if ($btnAddUrgentTask) $btnAddUrgentTask.disabled = true;
+    return;
+  }
+
+  const active = getActiveUrgentTasks();
+  const isFull = active.length >= URGENT_TASK_SLOTS.length;
+
+  if ($btnAddUrgentTask) {
+    $btnAddUrgentTask.disabled = isFull;
+    $btnAddUrgentTask.setAttribute("aria-disabled", isFull ? "true" : "false");
+    $btnAddUrgentTask.title = isFull
+      ? "Solo puedes tener 2 tareas urgentes. Completa o elimina una para agregar otra."
+      : "Agregar tarea urgente";
+  }
+
+  $urgentList.innerHTML = "";
+  if (!active.length) {
+    $urgentList.innerHTML = `<span class="muted">Sin tareas urgentes</span>`;
+    return;
+  }
+
+  for (const task of active) {
+    const item = document.createElement("div");
+    item.className = "urgent-task";
+    item.dataset.slotId = task.slotId || task.id || "";
+    item.innerHTML = `
+      <div class="urgent-task-title">${escapeHtml(task.title || "(Sin titulo)")}</div>
+      ${task.description ? `<div class="urgent-task-desc">${escapeHtml(task.description)}</div>` : ""}
+      <div class="urgent-task-actions">
+        <button type="button" class="btn tiny ghost urgent-task-action" data-urgent-action="edit">Editar</button>
+        <button type="button" class="btn tiny ghost urgent-task-action" data-urgent-action="complete">Completar</button>
+        <button type="button" class="btn tiny danger urgent-task-action" data-urgent-action="delete">Eliminar</button>
+      </div>
+    `;
+    $urgentList.appendChild(item);
+  }
+}
+
+function handleUrgentTaskClick(e) {
+  const actionBtn = e.target?.closest?.("[data-urgent-action]");
+  if (!actionBtn) return;
+
+  const item = actionBtn.closest("[data-slot-id]");
+  const slotId = item?.getAttribute("data-slot-id") || "";
+  const action = actionBtn.getAttribute("data-urgent-action");
+  const task = getUrgentTaskBySlot(slotId);
+  if (!slotId || !task) return;
+
+  if (action === "edit") {
+    openUrgentTaskModal(task);
+    return;
+  }
+
+  if (action === "complete") {
+    UI_STATE.onCompleteUrgentTask?.(slotId);
+    return;
+  }
+
+  if (action === "delete") {
+    const ok = confirm("¿Eliminar esta tarea urgente?");
+    if (!ok) return;
+    UI_STATE.onDeleteUrgentTask?.(slotId);
+  }
+}
+
+function openUrgentTaskModal(task = null) {
+  if (!UI_STATE.urgentContext?.visible) return;
+
+  if (!task && getActiveUrgentTasks().length >= URGENT_TASK_SLOTS.length) {
+    notify("Solo puedes tener 2 tareas urgentes. Completa o elimina una para agregar otra.", { mode: "toast", ms: 3200 });
+    return;
+  }
+
+  const existing = document.getElementById("urgentTaskModal");
+  existing?.remove();
+
+  const modal = document.createElement("div");
+  modal.id = "urgentTaskModal";
+  modal.className = "modal";
+  modal.innerHTML = `
+    <div class="modal-content urgent-modal-card" role="dialog" aria-modal="true" aria-labelledby="urgentTaskModalTitle">
+      <div class="modal-head">
+        <h3 id="urgentTaskModalTitle">${task ? "Editar tarea urgente" : "Nueva tarea urgente"}</h3>
+        <p class="muted">Máximo 2 tareas activas por usuario.</p>
+      </div>
+      <form id="urgentTaskForm" class="form-grid">
+        <label>
+          <span>Título</span>
+          <input id="urgentTaskTitle" type="text" maxlength="120" required />
+        </label>
+        <label>
+          <span>Descripción</span>
+          <textarea id="urgentTaskDescription" maxlength="500" rows="4"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" data-urgent-close>Cancelar</button>
+          <button type="submit" class="btn primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  const overlay = document.createElement("div");
+  overlay.id = "urgentTaskOverlay";
+  overlay.className = "overlay";
+
+  document.body.appendChild(overlay);
+  document.body.appendChild(modal);
+  document.body.classList.add("modal-open");
+
+  const titleInput = modal.querySelector("#urgentTaskTitle");
+  const descInput = modal.querySelector("#urgentTaskDescription");
+  titleInput.value = task?.title || "";
+  descInput.value = task?.description || "";
+  titleInput.focus();
+
+  const close = () => closeUrgentTaskModal();
+  overlay.addEventListener("click", close);
+  modal.querySelector("[data-urgent-close]")?.addEventListener("click", close);
+  modal.querySelector("#urgentTaskForm")?.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+
+    const title = titleInput.value.trim();
+    const description = descInput.value.trim();
+
+    if (!title) {
+      notify("El titulo de la tarea urgente es obligatorio.", { mode: "toast" });
+      titleInput.focus();
+      return;
+    }
+    if (title.length > 120 || description.length > 500) {
+      notify("Revisa la longitud del titulo o la descripcion.", { mode: "toast" });
+      return;
+    }
+
+    if (task) {
+      UI_STATE.onUpdateUrgentTask?.(task.slotId || task.id, { title, description });
+    } else {
+      const slotId = getFreeUrgentSlot();
+      if (!slotId) {
+        notify("Solo puedes tener 2 tareas urgentes. Completa o elimina una para agregar otra.", { mode: "toast", ms: 3200 });
+        return;
+      }
+      UI_STATE.onCreateUrgentTask?.({ title, description });
+    }
+
+    closeUrgentTaskModal();
+  });
+}
+
+function closeUrgentTaskModal() {
+  document.getElementById("urgentTaskModal")?.remove();
+  document.getElementById("urgentTaskOverlay")?.remove();
+  if (!$eventModal || $eventModal.classList.contains("hidden")) {
+    document.body.classList.remove("modal-open");
   }
 }
 

@@ -18,7 +18,7 @@
 
 import { db, serverTimestamp, Timestamp } from "./firebase.js";
 import { startOfDay, endOfDay, toISODateLocal, normText } from "./utils.js";
-import { DEFAULT_CATEGORIES, DEFAULT_ASSIGNEES } from "./constants.js";
+import { DEFAULT_CATEGORIES, DEFAULT_ASSIGNEES, URGENT_TASK_SLOTS } from "./constants.js";
 
 import {
   collection,
@@ -28,6 +28,7 @@ import {
   getDoc,
   setDoc,
   getDocs,
+  deleteDoc,
   query,
   where,
   orderBy,
@@ -41,6 +42,7 @@ import {
 const EVENTS_COL = collection(db, "events");
 const USERS_COL  = "users"; // string, usamos doc(db, USERS_COL, uid)
 const SETTINGS_DOC = doc(db, "settings", "catalogs");
+const URGENT_SLOT_SET = new Set(URGENT_TASK_SLOTS);
 
 /* =============================================================================
    GESTIÓN DE USUARIOS (users/{uid})
@@ -160,6 +162,98 @@ export async function saveCatalogSettings({ categories, assignees } = {}, userEm
   if (Array.isArray(assignees)) patch.assignees = assignees;
 
   await setDoc(SETTINGS_DOC, patch, { merge: true });
+  return true;
+}
+
+function urgentTaskRef(uid, slotId) {
+  const cleanUid = cleanString(uid, "");
+  const cleanSlot = cleanString(slotId, "");
+  if (!cleanUid) throw new Error("uid requerido.");
+  if (!URGENT_SLOT_SET.has(cleanSlot)) throw new Error("Slot de tarea urgente invalido.");
+  return doc(db, USERS_COL, cleanUid, "urgentTasks", cleanSlot);
+}
+
+function mapUrgentTaskDoc(docSnap) {
+  const data = docSnap.data() || {};
+  return {
+    id: docSnap.id,
+    slotId: docSnap.id,
+    title: cleanString(data.title, ""),
+    description: cleanString(data.description, ""),
+    status: cleanString(data.status, "pending") || "pending",
+    ownerUid: cleanString(data.ownerUid, ""),
+    ownerEmail: cleanString(data.ownerEmail, ""),
+    createdBy: cleanString(data.createdBy, ""),
+    updatedBy: cleanString(data.updatedBy, ""),
+    createdAt: data.createdAt || null,
+    updatedAt: data.updatedAt || null,
+    completedAt: data.completedAt || null
+  };
+}
+
+export function subscribeUrgentTasks(uid, onData, onError) {
+  const cleanUid = cleanString(uid, "");
+  if (!cleanUid) throw new Error("uid requerido.");
+
+  const colRef = collection(db, USERS_COL, cleanUid, "urgentTasks");
+  return onSnapshot(
+    colRef,
+    (snap) => {
+      const tasks = snap.docs
+        .map(mapUrgentTaskDoc)
+        .filter(task => URGENT_SLOT_SET.has(task.slotId))
+        .sort((a, b) => URGENT_TASK_SLOTS.indexOf(a.slotId) - URGENT_TASK_SLOTS.indexOf(b.slotId));
+      onData?.(tasks);
+    },
+    (err) => {
+      console.error("subscribeUrgentTasks error:", err);
+      onError?.(err);
+    }
+  );
+}
+
+export async function upsertUrgentTask(uid, slotId, payload = {}, userEmail = "") {
+  const title = cleanString(payload.title, "").slice(0, 120);
+  const description = cleanString(payload.description, "").slice(0, 500);
+  const ownerEmail = cleanString(userEmail, "").toLowerCase();
+
+  if (!title) throw new Error("El titulo de la tarea urgente es obligatorio.");
+
+  const ref = urgentTaskRef(uid, slotId);
+  const snap = await getDoc(ref);
+  const base = {
+    title,
+    description,
+    status: "pending",
+    ownerUid: cleanString(uid, ""),
+    ownerEmail,
+    updatedAt: serverTimestamp(),
+    updatedBy: ownerEmail,
+    completedAt: null
+  };
+
+  if (!snap.exists()) {
+    base.createdAt = serverTimestamp();
+    base.createdBy = ownerEmail;
+  }
+
+  await setDoc(ref, base, { merge: true });
+  return { id: slotId, slotId, ...base };
+}
+
+export async function completeUrgentTask(uid, slotId, userEmail = "") {
+  const email = cleanString(userEmail, "").toLowerCase();
+  await updateDoc(urgentTaskRef(uid, slotId), {
+    status: "done",
+    completedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    updatedBy: email
+  });
+  return true;
+}
+
+export async function deleteUrgentTask(uid, slotId) {
+  await deleteDoc(urgentTaskRef(uid, slotId));
   return true;
 }
 
