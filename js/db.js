@@ -18,7 +18,15 @@
 
 import { db, serverTimestamp, Timestamp } from "./firebase.js";
 import { startOfDay, endOfDay, toISODateLocal, normText } from "./utils.js";
-import { DEFAULT_CATEGORIES, DEFAULT_ASSIGNEES, URGENT_TASK_SLOTS } from "./constants.js";
+import {
+  DEFAULT_CATEGORIES,
+  DEFAULT_ASSIGNEES,
+  URGENT_TASK_SLOTS,
+  DEFAULT_ROLE_PERMISSIONS,
+  DEFAULT_EMAIL_ROLES,
+  normalizePermissionsMap,
+  USER_ROLES
+} from "./constants.js";
 
 import {
   collection,
@@ -43,7 +51,174 @@ import {
 const EVENTS_COL = collection(db, "events");
 const USERS_COL  = "users"; // string, usamos doc(db, USERS_COL, uid)
 const SETTINGS_DOC = doc(db, "settings", "catalogs");
+const ACCESS_DOC   = doc(db, "settings", "access");
+const AUDIT_COL    = collection(db, "audit");
 const URGENT_SLOT_SET = new Set(URGENT_TASK_SLOTS);
+
+/* =============================================================================
+   AUDITORÍA (best-effort)
+   ───────────────────────
+   Deja un registro inmutable de quién creó/editó/eliminó cada evento.
+   Nunca lanza: si falla (permisos/red), se ignora para no romper la operación.
+============================================================================= */
+async function logAudit(action, { eventId = null, title = null, category = null } = {}, userEmail = "") {
+  try {
+    await addDoc(AUDIT_COL, {
+      action,                                  // "create" | "update" | "delete"
+      eventId:  eventId || null,
+      title:    title != null ? cleanString(title, "") : null,
+      category: category != null ? cleanString(category, "") : null,
+      by:       cleanString(userEmail, ""),
+      at:       serverTimestamp()
+    });
+  } catch (err) {
+    console.warn("[db] auditoría no registrada (ignorado):", err?.message || err);
+  }
+}
+
+/* =============================================================================
+   CONTROL DE ACCESO (settings/access)
+   ───────────────────────────────────
+   Documento único que centraliza:
+     emailRoles  → mapa correo→rol (lista blanca / bootstrap)
+     permissions → matriz rol→{read:[], write:[]} editable desde el panel
+   Si el documento no existe, se devuelven los valores por defecto de
+   constants.js (DEFAULT_EMAIL_ROLES / DEFAULT_ROLE_PERMISSIONS).
+============================================================================= */
+
+function normalizeEmailRoles(raw) {
+  const out = {};
+  const knownRoles = new Set(Object.values(USER_ROLES));
+  for (const [email, role] of Object.entries(raw || {})) {
+    const e = String(email || "").trim().toLowerCase();
+    const r = String(role || "").trim().toLowerCase();
+    if (e && knownRoles.has(r)) out[e] = r;
+  }
+  return out;
+}
+
+/**
+ * Lee settings/access. Nunca lanza: ante cualquier error devuelve defaults,
+ * para que la app siga funcionando (fail-safe).
+ * @returns {Promise<{ emailRoles: Object, permissions: Object, _source: string }>}
+ */
+export async function getAccessSettings() {
+  try {
+    const snap = await getDoc(ACCESS_DOC);
+    if (!snap.exists()) {
+      return {
+        emailRoles:  { ...DEFAULT_EMAIL_ROLES },
+        permissions: normalizePermissionsMap(DEFAULT_ROLE_PERMISSIONS),
+        _source: "defaults"
+      };
+    }
+    const data = snap.data() || {};
+    return {
+      emailRoles:  normalizeEmailRoles(data.emailRoles),
+      permissions: normalizePermissionsMap(data.permissions),
+      _source: "firestore"
+    };
+  } catch (err) {
+    console.warn("[db] getAccessSettings: usando defaults por error de lectura.", err);
+    return {
+      emailRoles:  { ...DEFAULT_EMAIL_ROLES },
+      permissions: normalizePermissionsMap(DEFAULT_ROLE_PERMISSIONS),
+      _source: "defaults"
+    };
+  }
+}
+
+/**
+ * Guarda (merge) la matriz de permisos y/o la lista blanca de correos.
+ * Solo dirección puede escribir (lo refuerzan las reglas de Firestore).
+ */
+export async function saveAccessSettings({ emailRoles, permissions } = {}, userEmail = "") {
+  const patch = {
+    updatedAt: serverTimestamp(),
+    updatedBy: cleanString(userEmail, "")
+  };
+  if (emailRoles && typeof emailRoles === "object") {
+    patch.emailRoles = normalizeEmailRoles(emailRoles);
+  }
+  if (permissions && typeof permissions === "object") {
+    patch.permissions = normalizePermissionsMap(permissions);
+  }
+  await setDoc(ACCESS_DOC, patch, { merge: true });
+  return true;
+}
+
+/* =============================================================================
+   ADMINISTRACIÓN DE USUARIOS (panel)
+   ──────────────────────────────────
+   Solo dirección puede listar todos los usuarios y cambiar roles/estado
+   (lo refuerzan las reglas de Firestore).
+============================================================================= */
+
+/**
+ * Lista todos los usuarios registrados.
+ * @returns {Promise<Array<{uid,email,displayName,role,active}>>}
+ */
+export async function listUsers() {
+  const snaps = await getDocs(collection(db, USERS_COL));
+  return snaps.docs.map(d => {
+    const data = d.data() || {};
+    return {
+      uid:         d.id,
+      email:       String(data.email       || "").trim(),
+      displayName: String(data.displayName || "").trim(),
+      role:        String(data.role        || "comunidad").trim(),
+      active:      data.active !== false
+    };
+  }).sort((a, b) => a.email.localeCompare(b.email));
+}
+
+/** Cambia el rol de un usuario. */
+export async function updateUserRole(uid, role, userEmail = "") {
+  const id = cleanString(uid, "");
+  const r  = cleanString(role, "").toLowerCase();
+  if (!id) throw new Error("uid requerido.");
+  if (!Object.values(USER_ROLES).includes(r)) throw new Error("Rol inválido.");
+  await updateDoc(doc(db, USERS_COL, id), {
+    role: r,
+    updatedAt: serverTimestamp(),
+    updatedBy: cleanString(userEmail, "")
+  });
+  return true;
+}
+
+/**
+ * Lee los últimos registros de auditoría (más recientes primero).
+ * Solo admins (lo refuerzan las reglas). @returns {Promise<Array>}
+ */
+export async function listAuditLogs(max = 100) {
+  const n = Math.max(1, Math.min(500, Number(max) || 100));
+  const q = query(AUDIT_COL, orderBy("at", "desc"), limit(n));
+  const snaps = await getDocs(q);
+  return snaps.docs.map(d => {
+    const data = d.data() || {};
+    return {
+      id:       d.id,
+      action:   cleanString(data.action, ""),
+      eventId:  cleanString(data.eventId, ""),
+      title:    cleanString(data.title, ""),
+      category: cleanString(data.category, ""),
+      by:       cleanString(data.by, ""),
+      at:       data.at || null
+    };
+  });
+}
+
+/** Activa o bloquea el acceso de un usuario. */
+export async function setUserActive(uid, active, userEmail = "") {
+  const id = cleanString(uid, "");
+  if (!id) throw new Error("uid requerido.");
+  await updateDoc(doc(db, USERS_COL, id), {
+    active: !!active,
+    updatedAt: serverTimestamp(),
+    updatedBy: cleanString(userEmail, "")
+  });
+  return true;
+}
 
 /* =============================================================================
    GESTIÓN DE USUARIOS (users/{uid})
@@ -60,9 +235,11 @@ const URGENT_SLOT_SET = new Set(URGENT_TASK_SLOTS);
    Notas de diseño:
    - El UID de Firebase Auth es el ID del documento (no un campo aparte)
    - "active: false" bloquea el acceso aunque el rol exista
-   - Los campos allowedCategories y canWrite que puedas ver en Firestore
-     son IGNORADOS — la fuente de verdad es ROLE_PERMISSIONS en constants.js
-   - Al crear automáticamente un nuevo usuario, siempre recibe role "comunidad"
+   - users/{uid} solo guarda QUIÉN es cada quién (role + active). QUÉ puede ver
+     o editar cada rol vive en settings/access.permissions (la matriz editable
+     desde el panel). El default/fallback está en constants.js.
+   - Al crear un usuario nuevo recibe el rol de la lista blanca por su correo
+     (settings/access.emailRoles); si no está en la lista, "comunidad".
 ============================================================================= */
 
 /**
@@ -102,15 +279,19 @@ export async function getUserProfile(uid) {
  * @param {{ uid: string, email: string|null, displayName: string|null }} firebaseUser
  * @returns {Promise<{uid: string, email: string, displayName: string, role: string, active: boolean}>}
  */
-export async function createUserProfile(firebaseUser) {
+export async function createUserProfile(firebaseUser, initialRole = "comunidad") {
   const { uid, email, displayName } = firebaseUser || {};
 
   if (!uid) throw new Error("createUserProfile: uid requerido.");
 
+  const role = Object.values(USER_ROLES).includes(String(initialRole).toLowerCase())
+    ? String(initialRole).toLowerCase()
+    : "comunidad";
+
   const profile = {
     email:       String(email       || "").trim().toLowerCase(),
     displayName: String(displayName || email || "").trim(),
-    role:        "comunidad",
+    role,
     active:      true,
     createdAt:   serverTimestamp()
   };
@@ -129,6 +310,28 @@ export async function createUserProfile(firebaseUser) {
   } catch (err) {
     console.error("[db] createUserProfile error:", err);
     throw err;
+  }
+}
+
+/**
+ * Sincroniza el rol del PROPIO usuario con el indicado por la lista blanca.
+ * Lo permiten las reglas solo si el rol coincide con emailRoles[email].
+ * Si falla (no autorizado), no rompe el login: se ignora.
+ */
+export async function syncOwnRoleFromWhitelist(uid, role, userEmail = "") {
+  const id = cleanString(uid, "");
+  const r  = cleanString(role, "").toLowerCase();
+  if (!id || !Object.values(USER_ROLES).includes(r)) return false;
+  try {
+    await updateDoc(doc(db, USERS_COL, id), {
+      role: r,
+      updatedAt: serverTimestamp(),
+      updatedBy: cleanString(userEmail, "") || "bootstrap"
+    });
+    return true;
+  } catch (err) {
+    console.warn("[db] syncOwnRoleFromWhitelist: no autorizado o error.", err);
+    return false;
   }
 }
 
@@ -590,6 +793,7 @@ export async function createEvent(input, userEmail) {
   };
 
   const ref = await addDoc(EVENTS_COL, payload);
+  await logAudit("create", { eventId: ref.id, title, category }, email);
   return { id: ref.id, ...payload };
 }
 
@@ -656,6 +860,11 @@ export async function updateEvent(eventId, input, userEmail) {
   });
 
   await updateDoc(ref, finalPatch);
+  await logAudit("update", {
+    eventId:  id,
+    title:    "title" in patch ? patch.title : existing.title,
+    category: "category" in patch ? patch.category : existing.category
+  }, email);
   return { id, ...existing, ...patch };
 }
 
@@ -671,6 +880,7 @@ export async function softDeleteEvent(eventId, userEmail) {
     updatedAt: serverTimestamp(),
     updatedBy: cleanString(userEmail, "")
   });
+  await logAudit("delete", { eventId: id }, userEmail);
   return true;
 }
 
@@ -686,7 +896,24 @@ export async function restoreEvent(eventId, userEmail) {
     updatedAt: serverTimestamp(),
     updatedBy: cleanString(userEmail, "")
   });
+  await logAudit("restore", { eventId: id }, userEmail);
   return true;
+}
+
+/**
+ * Lista los eventos en la papelera (deletedAt != null), más recientes primero.
+ * @returns {Promise<Array>}
+ */
+export async function getDeletedEvents(max = 100) {
+  const n = Math.max(1, Math.min(500, Number(max) || 100));
+  const q = query(
+    EVENTS_COL,
+    where("deletedAt", "!=", null),
+    orderBy("deletedAt", "desc"),
+    limit(n)
+  );
+  const snaps = await getDocs(q);
+  return snaps.docs.map(mapEventDoc);
 }
 
 /* =========================

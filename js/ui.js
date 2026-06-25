@@ -193,8 +193,10 @@ function statusLabel(id) {
 function applyPermissionGates() {
   const can = !!UI_STATE.canWrite;
 
+  // En solo lectura ocultamos del todo el botón de crear (antes solo se veía
+  // "apagado" pero seguía clickeable) y mostramos un distintivo claro.
   if ($btnNewEvent) {
-    $btnNewEvent.classList.toggle("disabled", !can);
+    $btnNewEvent.classList.toggle("hidden", !can);
     $btnNewEvent.setAttribute("aria-disabled", can ? "false" : "true");
   }
 
@@ -206,6 +208,24 @@ function applyPermissionGates() {
   if ($eventForm) {
     $eventForm.classList.toggle("readonly", !can);
   }
+
+  ensureReadonlyBadge(!can);
+}
+
+/* Distintivo "Solo lectura" en el encabezado, junto al correo del usuario. */
+function ensureReadonlyBadge(show) {
+  let badge = document.getElementById("roleBadge");
+  if (!badge) {
+    const anchor = document.getElementById("userEmail");
+    if (!anchor || !anchor.parentElement) return;
+    badge = document.createElement("span");
+    badge.id = "roleBadge";
+    badge.className = "role-badge hidden";
+    badge.textContent = "Solo lectura";
+    badge.title = "Tu rol puede ver el calendario pero no editarlo.";
+    anchor.parentElement.insertBefore(badge, anchor.nextSibling);
+  }
+  badge.classList.toggle("hidden", !show);
 }
 
 /* =========================
@@ -545,11 +565,15 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterialize
     if (!window.__uiAuthBound) {
       window.addEventListener("auth:changed", (ev) => {
         const d = ev?.detail || {};
+        // Categorías que el rol puede EDITAR (para filtrar el form de evento).
+        UI_STATE.writeCategories = Array.isArray(d.writeCategories) ? d.writeCategories : [];
+        UI_STATE.isAdmin = !!d.isAdmin;
         if (typeof d.canWrite === "boolean") {
           UI_STATE.canWrite = d.canWrite;
-          applyPermissionGates();
-          rerender();
         }
+        populateCategorySelects();
+        applyPermissionGates();
+        rerender();
       });
       window.__uiAuthBound = true;
     }
@@ -1234,7 +1258,7 @@ function renderMiniOverviewItem(ev, { showDate = false, compact = false } = {}) 
       ${who ? `<span class="ov-who">@${escapeHtml(who)}</span>` : ""}
     </span>
     ${check}
-    <span class="ov-st" aria-hidden="true" style="color:${STATUS_COLORS[st] || "#64748B"}">${escapeHtml(st === "done" ? "✓" : (st === "cancelled" ? "×" : "•"))}</span>
+    ${UI_STATE.canWrite ? "" : `<span class="ov-st" aria-hidden="true" style="color:${STATUS_COLORS[st] || "#64748B"}">${escapeHtml(st === "done" ? "✓" : (st === "cancelled" ? "×" : "•"))}</span>`}
   `;
 
   return btn;
@@ -2180,8 +2204,14 @@ function populateCategorySelects() {
 
   if ($eventCategory) {
     const prev = $eventCategory.value || "";
+    // El formulario de crear/editar solo ofrece categorías que el rol puede
+    // EDITAR (coincide con lo que permiten las reglas de Firestore). Dirección
+    // tiene todas en su lista, así que no se le filtra ninguna.
+    const writable = Array.isArray(UI_STATE.writeCategories) ? UI_STATE.writeCategories : [];
+    const restrict = writable.length > 0;
     $eventCategory.innerHTML = "";
     for (const c of (UI_STATE.categories || getCategories())) {
+      if (restrict && !writable.includes(c.id)) continue;
       const opt = document.createElement("option");
       opt.value = c.id;
       opt.textContent = c.label;
@@ -2191,6 +2221,35 @@ function populateCategorySelects() {
       $eventCategory.value = prev;
     }
   }
+
+  renderCategoryLegend();
+}
+
+/* =========================
+   Leyenda de categorías (colores)
+========================= */
+function renderCategoryLegend() {
+  const filters = document.querySelector(".filters");
+  if (!filters) return;
+
+  let legend = document.getElementById("categoryLegend");
+  if (!legend) {
+    legend = document.createElement("div");
+    legend.id = "categoryLegend";
+    legend.className = "category-legend";
+    filters.appendChild(legend);
+  }
+
+  const cats = (UI_STATE.categories && UI_STATE.categories.length)
+    ? UI_STATE.categories
+    : getCategories();
+
+  legend.innerHTML = cats.map(c => `
+    <span class="legend-item" title="${escapeHtml(c.label)}">
+      <span class="legend-dot" style="background:${escapeHtml(c.color || "#64748B")}"></span>
+      <span class="legend-label">${escapeHtml(c.label)}</span>
+    </span>
+  `).join("");
 }
 
 function populateStatusSelects() {
@@ -2473,7 +2532,7 @@ function pickUniqueCategoryId(label, used) {
 /* =========================
    Notificaciones
 ========================= */
-function notify(msg, { mode = "toast", ms = 2200 } = {}) {
+export function notify(msg, { mode = "toast", ms = 2200 } = {}) {
   const text = String(msg || "").trim();
   if (!text) return;
 
@@ -2538,7 +2597,7 @@ function ensureCategoryManagerUI() {
         </div>
       </div>
 
-      <p class="cat-modal-hint">Cambias nombres y colores aquí, y queda guardado en este navegador.</p>
+      <p class="cat-modal-hint">Cambias nombres y colores aquí. Se guarda en la nube y lo ven todos los usuarios.</p>
 
       <div class="cat-list" id="catList"></div>
 
@@ -2562,7 +2621,7 @@ function ensureCategoryManagerUI() {
 
   modal.querySelector("#btnCatSave")?.addEventListener("click", saveCategoryManager);
   modal.querySelector("#btnCatReset")?.addEventListener("click", () => {
-    const ok = confirm("¿Restaurar las categorías por defecto? Se pierden tus cambios locales.");
+    const ok = confirm("¿Restaurar las categorías por defecto? Esto afecta a todos los usuarios.");
     if (!ok) return;
     UI_STATE.categories = resetCategories();
     rebuildCategoryMap();
@@ -2696,7 +2755,7 @@ async function saveCategoryManager() {
     await saveCatalogSettings({ categories: final }, UI_STATE.userEmail);
   } catch (err) {
     console.error("saveCategoryManager error:", err);
-    notify("Las categorías quedaron guardadas solo en este navegador. Falló la nube.", { ms: 3200 });
+    notify("No se pudieron guardar las categorías en la nube. Revisa tu conexión o permisos.", { ms: 3200 });
     return;
   }
 
@@ -2749,7 +2808,7 @@ function ensureAssigneeManagerUI() {
         </div>
       </div>
 
-      <p class="cat-modal-hint">Agrega, renombra o elimina responsables y queda guardado en este navegador.</p>
+      <p class="cat-modal-hint">Agrega, renombra o elimina responsables. Se guarda en la nube y lo ven todos los usuarios.</p>
 
       <div class="cat-list" id="asgList"></div>
 
@@ -2773,7 +2832,7 @@ function ensureAssigneeManagerUI() {
 
   modal.querySelector("#btnAsgSave")?.addEventListener("click", saveAssigneeManager);
   modal.querySelector("#btnAsgReset")?.addEventListener("click", () => {
-    const ok = confirm("¿Restaurar los responsables por defecto? Se pierden tus cambios locales.");
+    const ok = confirm("¿Restaurar los responsables por defecto? Esto afecta a todos los usuarios.");
     if (!ok) return;
     const assignees = resetAssignees();
     populateAssignedSelect(UI_STATE.rawEvents);
@@ -2881,7 +2940,7 @@ async function saveAssigneeManager() {
     await saveCatalogSettings({ assignees: final }, UI_STATE.userEmail);
   } catch (err) {
     console.error("saveAssigneeManager error:", err);
-    notify("Los responsables quedaron guardados solo en este navegador. Falló la nube.", { ms: 3200 });
+    notify("No se pudieron guardar los responsables en la nube. Revisa tu conexión o permisos.", { ms: 3200 });
     return;
   }
 

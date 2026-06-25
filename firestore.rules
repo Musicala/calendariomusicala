@@ -1,0 +1,243 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* =========================================================================
+       BÁSICOS DE SESIÓN / USUARIO
+    ========================================================================= */
+    function isLoggedIn() {
+      return request.auth != null;
+    }
+
+    function authEmail() {
+      return isLoggedIn() && request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : "";
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function userExists() {
+      return isLoggedIn() && exists(userPath(request.auth.uid));
+    }
+
+    function userDoc() {
+      return get(userPath(request.auth.uid));
+    }
+
+    function isActive() {
+      return userExists() && userDoc().data.active == true;
+    }
+
+    function role() {
+      return userExists() ? userDoc().data.role : "comunidad";
+    }
+
+    function isDireccion()      { return isActive() && role() == "direccion"; }
+    function isAdministrativo() { return isActive() && role() == "administrativo"; }
+    function isComercial()      { return isActive() && role() == "comercial"; }
+    function isDocente()        { return isActive() && role() == "docente"; }
+    function isComunidad()      { return isActive() && role() == "comunidad"; }
+
+    // "Admin" del sistema = dirección o administrativo (gestionan el panel)
+    function isAdminRole() { return isDireccion() || isAdministrativo(); }
+
+    function canUseUrgentTasks() {
+      return isDireccion() || isAdministrativo() || isComercial();
+    }
+
+    /* =========================================================================
+       CONTROL DE ACCESO DINÁMICO (settings/access)
+       -------------------------------------------------------------------------
+       emailRoles  → mapa correo→rol (lista blanca / bootstrap)
+       permissions → matriz rol→{read:[], write:[]}
+       Si el documento NO existe todavía, se usan valores por defecto baked-in
+       (para que la app y el primer admin funcionen antes de configurar nada).
+    ========================================================================= */
+    function accessPath() {
+      return /databases/$(database)/documents/settings/access;
+    }
+    function accessExists() { return exists(accessPath()); }
+    function accessData()   { return accessExists() ? get(accessPath()).data : {}; }
+
+    // --- Lista blanca por correo ---
+    function defaultEmailRoleFor(email) {
+      return email == "alekcaballeromusic@gmail.com"   ? "direccion"
+           : email == "catalina.medina.leal@gmail.com" ? "administrativo"
+           : email == "adminmusicala@gmail.com"        ? "administrativo"
+           : email == "musicalaasesor@gmail.com"       ? "comercial"
+           : "comunidad";
+    }
+    function emailRoleFor(email) {
+      return accessExists()
+        ? accessData().get("emailRoles", {}).get(email, "comunidad")
+        : defaultEmailRoleFor(email);
+    }
+
+    // --- Matriz de permisos ---
+    function permRead(r)  { return accessData().get("permissions", {}).get(r, {}).get("read",  []); }
+    function permWrite(r) { return accessData().get("permissions", {}).get(r, {}).get("write", []); }
+
+    // Defaults baked-in (deben coincidir con DEFAULT_ROLE_PERMISSIONS en constants.js)
+    function defaultCanWrite(r, c) {
+      return r == "direccion" ? true
+        : r == "administrativo" ? (c in [
+            "administrativo","atc_ventas","academico","formacion_docente",
+            "eventos","cumpleanos","festividades","marketing","otro"
+          ])
+        : r == "comercial" ? (c in ["atc_ventas","eventos","marketing"])
+        : false; // docente y comunidad no escriben
+    }
+    function defaultCanRead(r, c) {
+      return r == "comercial" ? (c in [
+            "atc_ventas","academico","eventos","cumpleanos","festividades","marketing","otro"
+          ])
+        : r == "docente" ? (c in [
+            "academico","formacion_docente","eventos","cumpleanos","festividades","otro"
+          ])
+        : r == "comunidad" ? (c in ["eventos","cumpleanos","festividades"])
+        : false;
+    }
+
+    // Resolución efectiva (dinámico si existe el doc, si no defaults)
+    function categoryWritable(c) {
+      return accessExists() ? (c in permWrite(role())) : defaultCanWrite(role(), c);
+    }
+    function categoryReadable(c) {
+      // Admins (dirección/administrativo) ven todo siempre.
+      return isAdminRole() ? true
+        : accessExists() ? (c in permRead(role())) : defaultCanRead(role(), c);
+    }
+
+    /* =========================================================================
+       USERS
+    ========================================================================= */
+    match /users/{uid} {
+      // Admins leen todos; cada quien lee el suyo.
+      allow read: if isAdminRole() || (isLoggedIn() && request.auth.uid == uid);
+
+      // Crear SOLO el propio perfil, una vez, con el rol que dicta la lista
+      // blanca para SU correo autenticado (evita suplantación de correo).
+      allow create: if isLoggedIn()
+        && request.auth.uid == uid
+        && !exists(userPath(uid))
+        && request.resource.data.email is string
+        && request.resource.data.email == authEmail()
+        && request.resource.data.displayName is string
+        && request.resource.data.active == true
+        && request.resource.data.role == emailRoleFor(authEmail());
+
+      // Update:
+      //  - Admins pueden cambiar rol/estado de cualquiera.
+      //  - Un usuario puede auto-ajustar SOLO su rol al de su lista blanca
+      //    (bootstrap), sin tocar su correo ni su estado.
+      allow update: if isAdminRole()
+        || (
+          isLoggedIn()
+          && request.auth.uid == uid
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.active == resource.data.active
+          && request.resource.data.role == emailRoleFor(authEmail())
+        );
+
+      // Borrar usuarios: solo admins.
+      allow delete: if isAdminRole();
+
+      match /urgentTasks/{taskId} {
+        allow read: if isLoggedIn() && isActive() && canUseUrgentTasks();
+
+        allow create, update: if isLoggedIn()
+          && request.auth.uid == uid
+          && isActive()
+          && canUseUrgentTasks()
+          && taskId in ["urgent_1", "urgent_2"]
+          && request.resource.data.keys().hasOnly([
+            "title","description","status","ownerUid","ownerEmail",
+            "createdAt","updatedAt","completedAt","createdBy","updatedBy"
+          ])
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.ownerEmail is string
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 120
+          && (
+            !("description" in request.resource.data)
+            || (
+              request.resource.data.description is string
+              && request.resource.data.description.size() <= 500
+            )
+          )
+          && request.resource.data.status in ["pending", "done"];
+
+        allow delete: if isLoggedIn()
+          && request.auth.uid == uid
+          && isActive()
+          && canUseUrgentTasks()
+          && taskId in ["urgent_1", "urgent_2"];
+      }
+    }
+
+    match /{path=**}/urgentTasks/{taskId} {
+      allow read: if isLoggedIn() && isActive() && canUseUrgentTasks();
+    }
+
+    /* =========================================================================
+       EVENTS — lectura y escritura según la matriz de permisos
+    ========================================================================= */
+    match /events/{eventId} {
+      // Leer: admins leen TODO sin condiciones (aunque algún evento viejo no
+      // tenga categoría válida). Los demás roles solo su lista de categorías.
+      allow read: if isAdminRole()
+        || (
+          isActive()
+          && resource.data.category is string
+          && categoryReadable(resource.data.category)
+        );
+
+      // Crear: según la categoría del nuevo evento.
+      allow create: if isActive()
+        && request.resource.data.category is string
+        && categoryWritable(request.resource.data.category);
+
+      // Actualizar: debe poder escribir tanto la categoría anterior como la nueva.
+      allow update: if isActive()
+        && request.resource.data.category is string
+        && resource.data.category is string
+        && categoryWritable(resource.data.category)
+        && categoryWritable(request.resource.data.category);
+
+      // Borrar: según la categoría existente.
+      allow delete: if isActive()
+        && resource.data.category is string
+        && categoryWritable(resource.data.category);
+    }
+
+    /* =========================================================================
+       SETTINGS / AUDIT
+    ========================================================================= */
+    // Configuración de acceso: cualquier autenticado la LEE (la app la necesita
+    // para el bootstrap y para filtrar categorías); solo admins la escriben.
+    match /settings/access {
+      allow read:  if isLoggedIn();
+      allow write: if isAdminRole();
+    }
+
+    // Catálogos (categorías/responsables) y demás settings: cualquier activo lee;
+    // solo admins escriben.
+    match /settings/{docId} {
+      allow read:  if isActive();
+      allow write: if isAdminRole();
+    }
+
+    // Bitácora de auditoría: append-only. Cualquier usuario activo puede dejar
+    // un registro al crear/editar/eliminar; solo admins la leen; nadie la edita
+    // ni borra (inmutable).
+    match /audit/{logId} {
+      allow read:   if isAdminRole();
+      allow create: if isActive();
+      allow update, delete: if false;
+    }
+  }
+}

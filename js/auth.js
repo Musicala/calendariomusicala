@@ -31,7 +31,7 @@
 ============================================================================= */
 
 import { auth, googleProvider } from "./firebase.js";
-import { getUserProfile, createUserProfile } from "./db.js";
+import { getUserProfile, createUserProfile, getAccessSettings, syncOwnRoleFromWhitelist } from "./db.js";
 import { USER_ROLES, getPermissionsForRole } from "./constants.js";
 
 import {
@@ -181,6 +181,12 @@ onAuthStateChanged(auth, async (user) => {
   let role     = USER_ROLES.COMUNIDAD;
   let firestoreOk = true;
 
+  /* ── Paso 0: cargar control de acceso (lista blanca + matriz) ── */
+  // Fail-safe: getAccessSettings nunca lanza, devuelve defaults si algo falla.
+  const access = await getAccessSettings();
+  const whitelistRole = sanitizeRole(access.emailRoles?.[email]);
+  const isWhitelisted = Object.prototype.hasOwnProperty.call(access.emailRoles || {}, email);
+
   /* ── Paso 1: buscar perfil en Firestore ── */
   try {
     profile = await getUserProfile(user.uid);
@@ -190,19 +196,25 @@ onAuthStateChanged(auth, async (user) => {
     firestoreOk = false;
   }
 
-  /* ── Paso 2: si no existe, crearlo automáticamente ── */
+  /* ── Paso 2: si no existe, crearlo con el rol de la lista blanca ── */
   if (firestoreOk && !profile) {
+    const initialRole = isWhitelisted ? whitelistRole : USER_ROLES.COMUNIDAD;
     try {
-      profile = await createUserProfile({
-        uid:         user.uid,
-        email:       email,
-        displayName: displayName
-      });
-      console.info("[auth] Perfil nuevo creado en Firestore con rol 'comunidad':", email);
+      profile = await createUserProfile(
+        { uid: user.uid, email, displayName },
+        initialRole
+      );
+      console.info(`[auth] Perfil nuevo creado para ${email} con rol '${initialRole}'.`);
     } catch (err) {
       console.warn("[auth] No se pudo crear perfil en Firestore. Usando comunidad.", err);
       firestoreOk = false;
     }
+  }
+
+  /* ── Paso 2b: si ya existía pero la lista blanca dice otro rol, sincronizar ── */
+  if (firestoreOk && profile && isWhitelisted && profile.role !== whitelistRole) {
+    const ok = await syncOwnRoleFromWhitelist(user.uid, whitelistRole, email);
+    if (ok) profile = { ...profile, role: whitelistRole };
   }
 
   /* ── Paso 3: determinar rol ── */
@@ -229,10 +241,11 @@ onAuthStateChanged(auth, async (user) => {
   }
   // Si firestoreOk === false (offline/error), role queda como "comunidad"
 
-  /* ── Paso 4: derivar permisos desde ROLE_PERMISSIONS ── */
-  // Los permisos NUNCA se leen de Firestore, siempre de constants.js.
-  // Esto garantiza consistencia: cambiar permisos es solo tocar constants.js.
-  const { canWrite, allowedCategories } = getPermissionsForRole(role);
+  /* ── Paso 4: derivar permisos desde la matriz dinámica (settings/access) ── */
+  // La matriz se edita desde el Panel de administración (sin tocar código).
+  // Si Firestore no respondió, getAccessSettings ya devolvió los defaults.
+  const { canWrite, allowedCategories, writeCategories } =
+    getPermissionsForRole(role, access.permissions);
 
   /* ── Paso 5: actualizar UI y emitir evento ── */
   setAuthedUI(email);
@@ -244,7 +257,9 @@ onAuthStateChanged(auth, async (user) => {
     displayName,
     role,
     canWrite,
-    allowedCategories
+    allowedCategories,
+    writeCategories,
+    isAdmin:           role === USER_ROLES.DIRECCION || role === USER_ROLES.ADMINISTRATIVO
   });
 
   // Log de debug (se puede quitar en producción)
@@ -256,26 +271,6 @@ onAuthStateChanged(auth, async (user) => {
 
 /* =============================================================================
    EXPORTS
-   Útiles si otros módulos necesitan saber el rol actual sin escuchar el evento.
-   Nota: estos son helpers de consulta puntual, no estado reactivo.
 ============================================================================= */
-
-/**
- * Devuelve true si el email dado tiene un UID con perfil activo.
- * (Solo útil si ya tienes el perfil en memoria; para checks en tiempo real
- *  usa el evento "auth:changed".)
- * @deprecated Preferir escuchar "auth:changed" en su lugar.
- */
-export function getPermissionsForEmail_LEGACY(email) {
-  // Mantenido por compat si algo lo importaba. Retorna mínimos.
-  console.warn("[auth] getPermissionsForEmail_LEGACY está obsoleto. Usa el evento auth:changed.");
-  return {
-    allowed:           false,
-    role:              null,
-    canWrite:          false,
-    allowedCategories: []
-  };
-}
-
 // Exportar USER_ROLES para conveniencia (evita importar constants en otros lados)
 export { USER_ROLES };

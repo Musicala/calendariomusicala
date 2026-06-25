@@ -11,14 +11,17 @@
       ✅ filtra consultas por allowedCategories (RBAC cliente)
 ============================================================================= */
 
-import { initUI, setEvents, setMonth, getCurrentView, setCatalogData, setUrgentTaskContext, setUrgentTasks } from "./ui.js";
+import { initUI, setEvents, setMonth, getCurrentView, setCatalogData, setUrgentTaskContext, setUrgentTasks, notify } from "./ui.js";
 import { createEvent, updateEvent, softDeleteEvent, subscribeEventsInRange, getCatalogSettings, subscribeUrgentTasks, upsertUrgentTask, completeUrgentTask, deleteUrgentTask } from "./db.js";
 import { canUseUrgentTasks, URGENT_TASK_SLOTS } from "./constants.js";
 import { startOfMonth, endOfMonth } from "./utils.js";
 
-// Para que repeticiones aparezcan en meses futuros,
-// cargamos eventos “semilla” de meses anteriores.
-const LOOKBACK_YEARS = 5;
+// Para que las repeticiones aparezcan en meses futuros, cargamos eventos
+// "semilla" de meses anteriores. El calendario arrancó en 2026, así que 2 años
+// de ventana cubren cualquier recurrencia y reducen ~60% la carga vs. 5 años.
+// (Optimización futura: consulta dedicada solo de semillas recurrentes; requiere
+//  índices de Firestore y pruebas en vivo.)
+const LOOKBACK_YEARS = 2;
 
 /* =========================
    Estado global app
@@ -27,6 +30,7 @@ let CURRENT_USER = null;           // Firebase user
 let USER_EMAIL = "";               // email normalizado
 let USER_ROLE = null;              // "administrativo" | "academico" | null
 let CAN_WRITE = false;             // permisos derivados
+let IS_ADMIN = false;              // dirección o administrativo (ven todo)
 let ALLOWED_CATEGORIES = [];       // categorías permitidas para queries
 
 let unsubMonth = null;             // unsubscribe del onSnapshot
@@ -73,8 +77,9 @@ function requireUrgentAccess() {
 }
 
 function toast(msg) {
-  // Minimalista por ahora
+  // Muestra un toast real (definido en ui.js) y deja rastro en consola.
   console.log(msg);
+  try { notify(msg, { mode: "toast", ms: 2000 }); } catch (_) {}
 }
 
 function activeUrgentTasks() {
@@ -109,7 +114,9 @@ function subscribeMonth(year, monthIndex) {
       alert("No se pudieron cargar eventos (revisa permisos o conexión).");
     },
     // opts RBAC cliente (db.js lo usa para filtrar category in allowedCategories)
-    { allowedCategories: CAN_WRITE ? [] : ALLOWED_CATEGORIES }
+    // Admins (dirección/administrativo) ven todo → sin filtro.
+    // Los demás SOLO pueden leer su lista de categorías (las reglas lo exigen).
+    { allowedCategories: IS_ADMIN ? [] : ALLOWED_CATEGORIES }
   );
 }
 
@@ -303,6 +310,7 @@ window.addEventListener("auth:changed", (ev) => {
     USER_EMAIL = "";
     USER_ROLE = null;
     CAN_WRITE = false;
+    IS_ADMIN = false;
     ALLOWED_CATEGORIES = [];
     catalogsLoaded = false;
 
@@ -320,6 +328,7 @@ window.addEventListener("auth:changed", (ev) => {
 
   USER_ROLE = detail.role || null;
   CAN_WRITE = !!detail.canWrite;
+  IS_ADMIN  = !!detail.isAdmin;
   ALLOWED_CATEGORIES = Array.isArray(detail.allowedCategories) ? detail.allowedCategories : [];
 
   // UI

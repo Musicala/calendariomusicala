@@ -7,11 +7,19 @@
   - Estados, textos, responsables, helpers de categorías
 ============================================================================= */
 
-/* =========================
-   Storage keys
-========================= */
-const CATEGORIES_STORAGE_KEY = "musicala.calendar.categories.v3";
-const ASSIGNEES_STORAGE_KEY   = "musicala.calendar.assignees.v2";
+/* =============================================================================
+   ESTADO EN MEMORIA (NADA de localStorage)
+   ─────────────────────────────────────────
+   Catálogos (categorías y responsables) viven solo en memoria durante la
+   sesión. La persistencia compartida es Firestore (settings/catalogs):
+     - Al iniciar, app.js carga catálogos de Firestore → hydrateCategories /
+       hydrateAssignees rellenan estas variables.
+     - Los editores guardan en Firestore (saveCatalogSettings) y refrescan estas
+       variables. Otros usuarios ven los cambios al recargar.
+   Si Firestore no respondió aún, se usan los DEFAULT_* como fallback.
+============================================================================= */
+let MEM_CATEGORIES = null; // null = aún no hidratado → se usan DEFAULT_CATEGORIES
+let MEM_ASSIGNEES  = null; // null = aún no hidratado → se usan DEFAULT_ASSIGNEES
 
 /* =========================
    Helpers base
@@ -19,26 +27,6 @@ const ASSIGNEES_STORAGE_KEY   = "musicala.calendar.assignees.v2";
 function clone(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
   catch (_) { return obj; }
-}
-
-function safeParseJSON(raw, fallback = null) {
-  try { return JSON.parse(raw); }
-  catch (_) { return fallback; }
-}
-
-function safeGetStorage(key) {
-  try { return localStorage.getItem(key); }
-  catch (_) { return null; }
-}
-
-function safeSetStorage(key, value) {
-  try { localStorage.setItem(key, value); return true; }
-  catch (_) { return false; }
-}
-
-function safeRemoveStorage(key) {
-  try { localStorage.removeItem(key); return true; }
-  catch (_) { return false; }
 }
 
 function safeSlug(value) {
@@ -111,62 +99,70 @@ export function canUseUrgentTasks(role) {
 }
 
 /* =============================================================================
-   PERMISOS POR ROL — FUENTE CENTRAL DE VERDAD
-   ─────────────────────────────────────────────
-   Aquí se define qué puede ver y editar cada rol.
-   "canWrite"          → puede crear/editar/eliminar eventos
-   "allowedCategories" → ids de categorías visibles para ese rol
-                         (array vacío = sin filtro = ve todo; pero aquí
-                          siempre ponemos lista explícita para claridad)
+   PERMISOS POR ROL — VALORES POR DEFECTO (fallback)
+   ─────────────────────────────────────────────────
+   IMPORTANTE: a partir de ahora la fuente de verdad EN VIVO es el documento
+   Firestore  settings/access.permissions  (editable desde el Panel de
+   administración, sin tocar código). Lo de aquí abajo es solo el VALOR INICIAL
+   con el que se siembra ese documento y el fallback si Firestore no responde.
 
-   Las categorías reales del calendario son:
-     administrativo | financiero | sgsst | atc_ventas
-     academico | eventos | cumpleanos | marketing | otro
+   Cada rol define DOS listas de categorías:
+     "read"  → categorías que el rol puede VER en el calendario
+     "write" → categorías que el rol puede CREAR/EDITAR/ELIMINAR
+               (write siempre debe ser un subconjunto de read)
 
-   Regla de diseño:
-   - direccion: acceso total
-   - administrativo: acceso operativo amplio (todo menos nada, mismo que dirección)
-   - comercial: lo relacionado con ventas, clientes, marketing y eventos
-   - docente: lo académico + eventos relevantes, solo lectura
-   - comunidad: mínimo, solo lo público/comunitario, solo lectura
+   Categorías reales del calendario:
+     administrativo | financiero | sgsst | atc_ventas | academico
+     formacion_docente | eventos | cumpleanos | festividades | marketing | otro
+
+   Regla de diseño (afinable desde el panel):
+   - direccion:      acceso TOTAL (ve y edita todo, incluido lo delicado)
+   - administrativo: casi total, pero NO toca lo ultra-sensible (financiero/sgsst
+                     solo lectura) — así dirección y administrativo se diferencian
+   - comercial:      ventas, marketing, eventos, académico (lectura)
+   - docente:        académico + formación docente + eventos (solo lectura)
+   - comunidad:      estudiantes/acudientes — solo lo público (solo lectura)
 ============================================================================= */
-export const ROLE_PERMISSIONS = Object.freeze({
+
+/* Lista completa de ids de categoría — útil para "acceso total" */
+export const ALL_CATEGORY_IDS = Object.freeze([
+  "administrativo",
+  "financiero",
+  "sgsst",
+  "atc_ventas",
+  "academico",
+  "formacion_docente",
+  "eventos",
+  "cumpleanos",
+  "festividades",
+  "marketing",
+  "otro"
+]);
+
+export const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
 
   direccion: {
-    canWrite: true,
-    allowedCategories: [
-      "administrativo",
-      "financiero",
-      "sgsst",
-      "atc_ventas",
-      "academico",
-      "eventos",
-      "cumpleanos",
-      "festividades",
-      "marketing",
-      "otro"
-    ]
+    read:  [...ALL_CATEGORY_IDS],
+    write: [...ALL_CATEGORY_IDS]
   },
 
   administrativo: {
-    canWrite: true,
-    allowedCategories: [
+    read:  [...ALL_CATEGORY_IDS],
+    write: [
       "administrativo",
-      "financiero",
-      "sgsst",
       "atc_ventas",
       "academico",
+      "formacion_docente",
       "eventos",
       "cumpleanos",
       "festividades",
       "marketing",
       "otro"
-    ]
+    ] // ve financiero y sgsst, pero NO los edita (solo dirección)
   },
 
   comercial: {
-    canWrite: true,
-    allowedCategories: [
+    read: [
       "atc_ventas",
       "academico",
       "eventos",
@@ -174,42 +170,102 @@ export const ROLE_PERMISSIONS = Object.freeze({
       "festividades",
       "marketing",
       "otro"
+    ],
+    write: [
+      "atc_ventas",
+      "eventos",
+      "marketing"
     ]
   },
 
   docente: {
-    canWrite: false,
-    allowedCategories: [
+    read: [
       "academico",
+      "formacion_docente",
       "eventos",
       "cumpleanos",
       "festividades",
       "otro"
-    ]
+    ],
+    write: [] // solo lectura
   },
 
   comunidad: {
-    canWrite: false,
-    allowedCategories: [
+    read: [
       "eventos",
       "cumpleanos",
       "festividades"
-    ]
+    ],
+    write: [] // solo lectura
   }
 
 });
 
+/* =============================================================================
+   LISTA BLANCA POR CORREO (bootstrap de roles)
+   ─────────────────────────────────────────────
+   Valor inicial con el que se siembra settings/access.emailRoles.
+   Cuando uno de estos correos inicia sesión por primera vez, queda
+   automáticamente con su rol. Los correos que NO estén aquí entran como
+   "comunidad" (estudiante/acudiente). Editable desde el panel, sin código.
+============================================================================= */
+export const DEFAULT_EMAIL_ROLES = Object.freeze({
+  "alekcaballeromusic@gmail.com":   USER_ROLES.DIRECCION,
+  "catalina.medina.leal@gmail.com": USER_ROLES.ADMINISTRATIVO,
+  "adminmusicala@gmail.com":        USER_ROLES.ADMINISTRATIVO,
+  "musicalaasesor@gmail.com":       USER_ROLES.COMERCIAL
+});
+
 /**
- * Devuelve los permisos del rol dado.
- * Si el rol no existe, retorna permisos de "comunidad" (el más restrictivo).
- * @param {string} role
- * @returns {{ canWrite: boolean, allowedCategories: string[] }}
+ * Normaliza una entrada de permisos {read, write} asegurando arrays válidos
+ * y que write ⊆ read.
  */
-export function getPermissionsForRole(role) {
-  const perms = ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS[USER_ROLES.COMUNIDAD];
+function normalizePermEntry(entry) {
+  const read  = ensureArray(entry && entry.read).map(safeSlug).filter(Boolean);
+  let   write = ensureArray(entry && entry.write).map(safeSlug).filter(Boolean);
+  const readSet = new Set(read);
+  write = write.filter(id => readSet.has(id)); // write nunca excede read
   return {
-    canWrite: !!perms.canWrite,
-    allowedCategories: [...perms.allowedCategories]
+    read:  Array.from(new Set(read)),
+    write: Array.from(new Set(write))
+  };
+}
+
+/**
+ * Normaliza el mapa completo de permisos rol→{read,write}.
+ * Rellena con los valores por defecto cualquier rol faltante.
+ */
+export function normalizePermissionsMap(map) {
+  const out = {};
+  for (const role of Object.values(USER_ROLES)) {
+    const fromMap = map && typeof map === "object" ? map[role] : null;
+    out[role] = fromMap
+      ? normalizePermEntry(fromMap)
+      : clone(DEFAULT_ROLE_PERMISSIONS[role]);
+  }
+  return out;
+}
+
+/**
+ * Devuelve los permisos efectivos del rol dado a partir de un mapa de permisos
+ * (normalmente el que viene de Firestore). Si no se pasa mapa, usa los defaults.
+ *
+ * Retorna la forma que el resto de la app ya entiende:
+ *   { canWrite, allowedCategories, writeCategories }
+ *   - allowedCategories = categorías que puede VER (read)
+ *   - writeCategories   = categorías que puede EDITAR (write)
+ *   - canWrite          = true si puede editar al menos una categoría
+ *
+ * @param {string} role
+ * @param {Object} [permissionsMap]
+ */
+export function getPermissionsForRole(role, permissionsMap = null) {
+  const map  = permissionsMap ? normalizePermissionsMap(permissionsMap) : normalizePermissionsMap(DEFAULT_ROLE_PERMISSIONS);
+  const perms = map[role] || map[USER_ROLES.COMUNIDAD];
+  return {
+    canWrite:          perms.write.length > 0,
+    allowedCategories: [...perms.read],
+    writeCategories:   [...perms.write]
   };
 }
 
@@ -226,25 +282,13 @@ export const DEFAULT_CATEGORIES = [
   { id: "sgsst",          label: "SG-SST",                    color: "#EF4444" },
   { id: "atc_ventas",     label: "Atención al cliente y ventas", color: "#0EA5E9" },
   { id: "academico",      label: "Académico",                 color: "#22C55E" },
+  { id: "formacion_docente", label: "Formación docente",      color: "#0D9488" },
   { id: "eventos",        label: "Eventos",                   color: "#A855F7" },
   { id: "cumpleanos",     label: "Cumpleaños",                color: "#EC4899" },
   { id: "festividades",   label: "Festividades",              color: "#F59E0B" },
   { id: "marketing",      label: "Marketing y publicidad",    color: "#8B5CF6" },
   { id: "otro",           label: "Otro",                      color: "#64748B" }
 ];
-
-/* Categorías extendidas — sugeridas para el futuro, no activas por defecto */
-export const EXTENDED_CATEGORIES = [
-  { id: "direccion_interna",     label: "Dirección interna",     color: "#312E81" },
-  { id: "finanzas_sensibles",    label: "Finanzas sensibles",    color: "#D97706" },
-  { id: "eventos_institucionales", label: "Eventos institucionales", color: "#7C3AED" },
-  { id: "comunidad_externa",     label: "Comunidad externa",     color: "#14B8A6" }
-];
-
-export const ALL_KNOWN_CATEGORIES = uniqBy(
-  [...DEFAULT_CATEGORIES, ...EXTENDED_CATEGORIES].map(clone),
-  item => item.id
-);
 
 const FALLBACK_CATEGORY = DEFAULT_CATEGORIES.find(c => c.id === "otro") || {
   id: "otro", label: "Otro", color: "#64748B"
@@ -274,18 +318,14 @@ function normalizeCategoriesList(list) {
    API de categorías activas
 ========================= */
 export function getCategories() {
-  const raw = safeGetStorage(CATEGORIES_STORAGE_KEY);
-  if (!raw) return clone(DEFAULT_CATEGORIES);
-  const parsed = safeParseJSON(raw, null);
-  if (!Array.isArray(parsed)) return clone(DEFAULT_CATEGORIES);
-  const final = normalizeCategoriesList(parsed);
-  return final.length ? final : clone(DEFAULT_CATEGORIES);
+  if (!Array.isArray(MEM_CATEGORIES)) return clone(DEFAULT_CATEGORIES);
+  return MEM_CATEGORIES.length ? clone(MEM_CATEGORIES) : clone(DEFAULT_CATEGORIES);
 }
 
 export function setCategories(categories) {
   const final = normalizeCategoriesList(categories);
-  safeSetStorage(CATEGORIES_STORAGE_KEY, JSON.stringify(final));
-  return final;
+  MEM_CATEGORIES = clone(final);
+  return clone(final);
 }
 
 export function hydrateCategories(categories) {
@@ -293,39 +333,14 @@ export function hydrateCategories(categories) {
 }
 
 export function resetCategories() {
-  safeRemoveStorage(CATEGORIES_STORAGE_KEY);
+  MEM_CATEGORIES = clone(DEFAULT_CATEGORIES);
   return clone(DEFAULT_CATEGORIES);
-}
-
-export function getCategoryById(categoryId) {
-  const id = safeSlug(categoryId);
-  if (!id) return clone(FALLBACK_CATEGORY);
-  const active = getCategories();
-  const match = active.find(item => item.id === id) ||
-                ALL_KNOWN_CATEGORIES.find(item => item.id === id);
-  return clone(match || FALLBACK_CATEGORY);
 }
 
 export function hasCategory(categoryId) {
   const id = safeSlug(categoryId);
   if (!id) return false;
   return getCategories().some(item => item.id === id);
-}
-
-export function ensureCategoriesExist(categoryIds = []) {
-  const current = getCategories();
-  const currentIds = new Set(current.map(item => item.id));
-  const toAdd = ensureArray(categoryIds)
-    .map(id => safeSlug(id))
-    .filter(Boolean)
-    .filter(id => !currentIds.has(id))
-    .map(id => {
-      const known = ALL_KNOWN_CATEGORIES.find(item => item.id === id);
-      return known ? clone(known) : null;
-    })
-    .filter(Boolean);
-  if (!toAdd.length) return current;
-  return setCategories([...current, ...toAdd]);
 }
 
 /* Compat */
@@ -397,17 +412,14 @@ function normalizeAssigneesList(list) {
 }
 
 export function getAssignees() {
-  const raw = safeGetStorage(ASSIGNEES_STORAGE_KEY);
-  if (!raw) return [...DEFAULT_ASSIGNEES];
-  const parsed = safeParseJSON(raw, null);
-  if (!Array.isArray(parsed)) return [...DEFAULT_ASSIGNEES];
-  return normalizeAssigneesList(parsed);
+  if (!Array.isArray(MEM_ASSIGNEES)) return [...DEFAULT_ASSIGNEES];
+  return MEM_ASSIGNEES.length ? [...MEM_ASSIGNEES] : [...DEFAULT_ASSIGNEES];
 }
 
 export function setAssignees(names) {
   const final = normalizeAssigneesList(names);
-  safeSetStorage(ASSIGNEES_STORAGE_KEY, JSON.stringify(final));
-  return final;
+  MEM_ASSIGNEES = [...final];
+  return [...final];
 }
 
 export function hydrateAssignees(names) {
@@ -415,6 +427,6 @@ export function hydrateAssignees(names) {
 }
 
 export function resetAssignees() {
-  safeRemoveStorage(ASSIGNEES_STORAGE_KEY);
+  MEM_ASSIGNEES = [...DEFAULT_ASSIGNEES];
   return [...DEFAULT_ASSIGNEES];
 }
