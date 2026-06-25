@@ -187,6 +187,19 @@ function statusLabel(id) {
   return EVENT_STATUS.find(s => s.id === id)?.label || id || "Pendiente";
 }
 
+/* Primera categoría que el rol puede EDITAR (write). Se usa como valor por
+   defecto del formulario de evento, para no preseleccionar una categoría que
+   el rol no puede crear (p. ej. "Administrativo" para una asesora). */
+function getDefaultWritableCategoryId() {
+  const cats = Array.isArray(UI_STATE.categories) ? UI_STATE.categories : getCategories();
+  const writable = Array.isArray(UI_STATE.writeCategories) ? UI_STATE.writeCategories : [];
+  if (writable.length > 0) {
+    const first = cats.find(c => writable.includes(c.id));
+    if (first) return first.id;
+  }
+  return cats[0]?.id || "otro";
+}
+
 /* =========================
    Permissions gating
 ========================= */
@@ -1384,7 +1397,7 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
   UI_STATE.modalSourceOccurrence = prefillFromEvent?._virtualFromId ? prefillFromEvent : null;
   if ($modalTitle) $modalTitle.textContent = UI_STATE.modalSourceOccurrence ? "Editar ocurrencia" : "Nuevo evento";
 
-  const baseCat = (UI_STATE.categories?.[0]?.id) || "otro";
+  const baseCat = getDefaultWritableCategoryId();
 
   populateAssignedToModal(UI_STATE.rawEvents);
   populateRecurrenceSelect();
@@ -1418,7 +1431,7 @@ function openModalForEdit(ev) {
   ensureRecurrenceSectionUI();
 
   if ($eventTitle) $eventTitle.value = ev.title || "";
-  if ($eventCategory) $eventCategory.value = ev.category || (UI_STATE.categories?.[0]?.id || "otro");
+  if ($eventCategory) $eventCategory.value = ev.category || getDefaultWritableCategoryId();
   if ($eventDate) $eventDate.value = ev.dateISO || "";
   if ($eventStatus) $eventStatus.value = ev.status || "pending";
   if ($eventNotes) $eventNotes.value = ev.notes || "";
