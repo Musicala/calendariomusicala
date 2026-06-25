@@ -567,6 +567,8 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterialize
         const d = ev?.detail || {};
         // Categorías que el rol puede EDITAR (para filtrar el form de evento).
         UI_STATE.writeCategories = Array.isArray(d.writeCategories) ? d.writeCategories : [];
+        // Categorías que el rol puede VER (para filtrar el dropdown de filtro y la leyenda).
+        UI_STATE.allowedCategories = Array.isArray(d.allowedCategories) ? d.allowedCategories : [];
         UI_STATE.isAdmin = !!d.isAdmin;
         if (typeof d.canWrite === "boolean") {
           UI_STATE.canWrite = d.canWrite;
@@ -2190,7 +2192,13 @@ function populateCategorySelects() {
     $filterCategory.innerHTML = "";
     if (keep) $filterCategory.appendChild(keep);
 
+    // El filtro solo ofrece categorías que el rol puede VER (read). Así una
+    // asesora no ve categorías ajenas (p. ej. "Administrativo") que no puede
+    // ver, editar ni agregar, y no se confunde. Dirección las tiene todas.
+    const readable = Array.isArray(UI_STATE.allowedCategories) ? UI_STATE.allowedCategories : [];
+    const restrictFilter = readable.length > 0;
     for (const c of (UI_STATE.categories || getCategories())) {
+      if (restrictFilter && !readable.includes(c.id)) continue;
       const opt = document.createElement("option");
       opt.value = c.id;
       opt.textContent = c.label;
@@ -2240,9 +2248,15 @@ function renderCategoryLegend() {
     filters.appendChild(legend);
   }
 
-  const cats = (UI_STATE.categories && UI_STATE.categories.length)
+  const allCats = (UI_STATE.categories && UI_STATE.categories.length)
     ? UI_STATE.categories
     : getCategories();
+
+  // La leyenda solo muestra las categorías que el rol puede VER (read).
+  const readable = Array.isArray(UI_STATE.allowedCategories) ? UI_STATE.allowedCategories : [];
+  const cats = readable.length > 0
+    ? allCats.filter(c => readable.includes(c.id))
+    : allCats;
 
   legend.innerHTML = cats.map(c => `
     <span class="legend-item" title="${escapeHtml(c.label)}">
