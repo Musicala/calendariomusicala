@@ -168,6 +168,34 @@ let UI_STATE = {
   _globalKeysBound: false
 };
 
+/* =============================================================================
+   Listener de permisos (auth:changed)
+   ────────────────────────────────────
+   IMPORTANTE: se registra al CARGAR el módulo, NO dentro de initUI(). Si se
+   registrara dentro de initUI() y initUI() se invocara desde el propio handler
+   de auth:changed de app.js, este listener se añadiría DURANTE el despacho del
+   evento y, por las reglas del DOM, no se ejecutaría para ese primer evento.
+   Resultado: en la primera carga nunca se aplicaban writeCategories/
+   allowedCategories y el rol veía TODAS las categorías (bug de permisos).
+============================================================================= */
+if (typeof window !== "undefined" && !window.__uiAuthBound) {
+  window.addEventListener("auth:changed", (ev) => {
+    const d = ev?.detail || {};
+    // Categorías que el rol puede EDITAR (para filtrar el form de evento).
+    UI_STATE.writeCategories = Array.isArray(d.writeCategories) ? d.writeCategories : [];
+    // Categorías que el rol puede VER (para filtrar el dropdown de filtro y la leyenda).
+    UI_STATE.allowedCategories = Array.isArray(d.allowedCategories) ? d.allowedCategories : [];
+    UI_STATE.isAdmin = !!d.isAdmin;
+    if (typeof d.canWrite === "boolean") {
+      UI_STATE.canWrite = d.canWrite;
+    }
+    populateCategorySelects();
+    applyPermissionGates();
+    rerender();
+  });
+  window.__uiAuthBound = true;
+}
+
 /* =========================
    Helpers categorías/labels
 ========================= */
@@ -573,24 +601,6 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterialize
       });
 
       UI_STATE._globalKeysBound = true;
-    }
-
-    if (!window.__uiAuthBound) {
-      window.addEventListener("auth:changed", (ev) => {
-        const d = ev?.detail || {};
-        // Categorías que el rol puede EDITAR (para filtrar el form de evento).
-        UI_STATE.writeCategories = Array.isArray(d.writeCategories) ? d.writeCategories : [];
-        // Categorías que el rol puede VER (para filtrar el dropdown de filtro y la leyenda).
-        UI_STATE.allowedCategories = Array.isArray(d.allowedCategories) ? d.allowedCategories : [];
-        UI_STATE.isAdmin = !!d.isAdmin;
-        if (typeof d.canWrite === "boolean") {
-          UI_STATE.canWrite = d.canWrite;
-        }
-        populateCategorySelects();
-        applyPermissionGates();
-        rerender();
-      });
-      window.__uiAuthBound = true;
     }
 
     UI_STATE._initialized = true;
