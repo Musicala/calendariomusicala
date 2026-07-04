@@ -884,6 +884,33 @@ export async function softDeleteEvent(eventId, userEmail) {
   return true;
 }
 
+export async function updateEventSeries(parentEventId, input, userEmail) {
+  const parentId = cleanString(parentEventId, "");
+  if (!parentId) throw new Error("No se encontró el evento principal de la serie.");
+  const snap = await getDocs(query(EVENTS_COL, where("recurrenceParentId", "==", parentId)));
+  const children = snap.docs.map(mapEventDoc).filter(event => !event.deletedAt);
+
+  await updateEvent(parentId, input, userEmail);
+  const sharedPatch = pickDefined({
+    title: input?.title,
+    category: input?.category,
+    status: input?.status,
+    notes: input?.notes,
+    assignedTo: input?.assignedTo
+  });
+  for (const child of children) await updateEvent(child.id, sharedPatch, userEmail);
+  return { parentId, updatedChildren: children.length };
+}
+
+export async function softDeleteEventSeries(parentEventId, userEmail) {
+  const parentId = cleanString(parentEventId, "");
+  if (!parentId) throw new Error("No se encontró el evento principal de la serie.");
+  const snap = await getDocs(query(EVENTS_COL, where("recurrenceParentId", "==", parentId)));
+  const ids = [parentId, ...snap.docs.map(item => item.id)];
+  for (const id of ids) await softDeleteEvent(id, userEmail);
+  return { parentId, deleted: ids.length };
+}
+
 /* =========================
    RESTORE
 ========================= */

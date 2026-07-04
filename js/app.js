@@ -12,7 +12,7 @@
 ============================================================================= */
 
 import { initUI, setEvents, setMonth, getCurrentView, setCatalogData, setUrgentTaskContext, setUrgentTasks, notify } from "./ui.js";
-import { createEvent, updateEvent, softDeleteEvent, subscribeEventsInRange, getCatalogSettings, subscribeUrgentTasks, upsertUrgentTask, completeUrgentTask, deleteUrgentTask } from "./db.js";
+import { createEvent, updateEvent, updateEventSeries, softDeleteEvent, softDeleteEventSeries, subscribeEventsInRange, getCatalogSettings, subscribeUrgentTasks, upsertUrgentTask, completeUrgentTask, deleteUrgentTask } from "./db.js";
 import { canUseUrgentTasks, URGENT_TASK_SLOTS } from "./constants.js";
 import { startOfMonth, endOfMonth } from "./utils.js";
 
@@ -206,6 +206,20 @@ async function handleDelete(id) {
   }
 }
 
+async function handleUpdateSeries(parentId, payload) {
+  requireSession();
+  requireWrite();
+  await updateEventSeries(parentId, payload, USER_EMAIL);
+  toast("Serie recurrente actualizada ✅");
+}
+
+async function handleDeleteSeries(parentId) {
+  requireSession();
+  requireWrite();
+  await softDeleteEventSeries(parentId, USER_EMAIL);
+  toast("Serie recurrente eliminada 🗑️");
+}
+
 async function handleCreateUrgentTask(payload) {
   try {
     requireUrgentAccess();
@@ -286,7 +300,9 @@ function ensureUI() {
     onNavigate: handleNavigate,
     onCreate: handleCreate,
     onUpdate: handleUpdate,
+    onUpdateSeries: handleUpdateSeries,
     onDelete: handleDelete,
+    onDeleteSeries: handleDeleteSeries,
     onMaterializeOccurrence: handleMaterializeOccurrence,
     onCreateUrgentTask: handleCreateUrgentTask,
     onUpdateUrgentTask: handleUpdateUrgentTask,

@@ -154,7 +154,9 @@ let UI_STATE = {
   onNavigate: null,
   onCreate: null,
   onUpdate: null,
+  onUpdateSeries: null,
   onDelete: null,
+  onDeleteSeries: null,
   onMaterializeOccurrence: null,
   onCreateUrgentTask: null,
   onUpdateUrgentTask: null,
@@ -380,11 +382,13 @@ function getEventDateDayOfMonth() {
 /* =========================
    Init
 ========================= */
-export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterializeOccurrence, onCreateUrgentTask, onUpdateUrgentTask, onCompleteUrgentTask, onDeleteUrgentTask } = {}) {
+export function initUI({ onNavigate, onCreate, onUpdate, onUpdateSeries, onDelete, onDeleteSeries, onMaterializeOccurrence, onCreateUrgentTask, onUpdateUrgentTask, onCompleteUrgentTask, onDeleteUrgentTask } = {}) {
   UI_STATE.onNavigate = onNavigate || null;
   UI_STATE.onCreate   = onCreate   || null;
   UI_STATE.onUpdate   = onUpdate   || null;
+  UI_STATE.onUpdateSeries = onUpdateSeries || null;
   UI_STATE.onDelete   = onDelete   || null;
+  UI_STATE.onDeleteSeries = onDeleteSeries || null;
   UI_STATE.onMaterializeOccurrence = onMaterializeOccurrence || null;
   UI_STATE.onCreateUrgentTask = onCreateUrgentTask || null;
   UI_STATE.onUpdateUrgentTask = onUpdateUrgentTask || null;
@@ -453,6 +457,13 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterialize
         return;
       }
       const occurrence = UI_STATE.modalSourceOccurrence;
+      const edited = UI_STATE.rawEvents.find(event => String(event.id) === String(UI_STATE.editingId));
+      const parentId = occurrence?._virtualFromId || edited?.recurrenceParentId || (edited?.recurrence ? edited.id : "");
+      if (parentId && confirm("¿Deseas eliminar toda la serie recurrente?\n\nAceptar: toda la serie.\nCancelar: solo esta ocurrencia.")) {
+        await UI_STATE.onDeleteSeries?.(parentId);
+        closeModal();
+        return;
+      }
       if (occurrence?._virtualFromId) {
         const ok = confirm("¿Eliminar solo esta ocurrencia recurrente?");
         if (!ok) return;
@@ -471,7 +482,7 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterialize
       closeModal();
     });
 
-    $eventForm?.addEventListener("submit", (e) => {
+    $eventForm?.addEventListener("submit", async (e) => {
       e.preventDefault();
 
       if (!UI_STATE.canWrite) {
@@ -482,8 +493,28 @@ export function initUI({ onNavigate, onCreate, onUpdate, onDelete, onMaterialize
       const payload = readModalPayload();
       if (!payload) return;
 
-      if (UI_STATE.editingId) UI_STATE.onUpdate?.(UI_STATE.editingId, payload);
-      else UI_STATE.onCreate?.(payload);
+      const occurrence = UI_STATE.modalSourceOccurrence;
+      const edited = UI_STATE.rawEvents.find(event => String(event.id) === String(UI_STATE.editingId));
+      const parentId = occurrence?._virtualFromId || edited?.recurrenceParentId || (edited?.recurrence ? edited.id : "");
+
+      if (parentId && confirm("¿Deseas aplicar los cambios a toda la serie recurrente?\n\nAceptar: toda la serie.\nCancelar: solo esta ocurrencia.")) {
+        const seriesPayload = (occurrence?._virtualFromId || edited?.recurrenceParentId)
+          ? {
+              title: payload.title,
+              category: payload.category,
+              status: payload.status,
+              notes: payload.notes,
+              assignedTo: payload.assignedTo
+            }
+          : payload;
+        await UI_STATE.onUpdateSeries?.(parentId, seriesPayload);
+      } else if (occurrence?._virtualFromId) {
+        await UI_STATE.onMaterializeOccurrence?.(occurrence, payload);
+      } else if (UI_STATE.editingId) {
+        await UI_STATE.onUpdate?.(UI_STATE.editingId, payload);
+      } else {
+        await UI_STATE.onCreate?.(payload);
+      }
 
       closeModal();
     });
