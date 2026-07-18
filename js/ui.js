@@ -750,10 +750,10 @@ function renderWeeklyCategoryBanner({ bannerEl, listEl, categoryId, fallbackTitl
   monday.setHours(0, 0, 0, 0);
   monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
 
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
+  const nextSunday = new Date(monday);
+  nextSunday.setDate(monday.getDate() + 13);
   const fromISO = toISODateLocal(monday);
-  const toISO = toISODateLocal(sunday);
+  const toISO = toISODateLocal(nextSunday);
 
   const items = applyFilters(UI_STATE.events)
     .filter(ev => eventMatchesCategoryGroup(ev, categoryId))
@@ -775,8 +775,12 @@ function renderWeeklyCategoryBanner({ bannerEl, listEl, categoryId, fallbackTitl
 
   listEl.innerHTML = items.map(ev => {
     const date = formatBirthdayShort(ev.dateISO);
+    const weekLabel = String(ev.dateISO || "") <= toISODateLocal(new Date(monday.getTime() + 6 * 86400000))
+      ? "Esta semana"
+      : "Próxima semana";
     return `
       <div class="birthday-banner-item">
+        <span class="birthday-banner-week">${escapeHtml(weekLabel)}</span>
         <span class="birthday-banner-date">${escapeHtml(date)}</span>
         <span>${escapeHtml(ev.title || fallbackTitle)}</span>
       </div>
@@ -801,8 +805,10 @@ function eventMatchesCategoryGroup(ev, categoryId) {
     return (
       rawId === "festividades" ||
       rawId === "festividad" ||
+      rawId === "festivos" ||
       normalizedLabel.includes("festividades") ||
-      normalizedLabel.includes("festividad")
+      normalizedLabel.includes("festividad") ||
+      normalizedLabel.includes("festivo")
     );
   }
 
