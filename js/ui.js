@@ -313,6 +313,9 @@ function normalizeRecurrence(raw) {
       }
     }
 
+    const untilISO = String(raw.untilISO ?? raw.endDate ?? raw.recurrenceEnd ?? "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(untilISO)) normalized.untilISO = untilISO;
+
     return normalized;
   }
 
@@ -357,12 +360,19 @@ function recurrenceLabel(rec) {
     return u;
   };
 
+  if (r.untilISO) {
+    const names = { day: "día", week: "semana", month: "mes", year: "año" };
+    const cadence = interval === 1 ? `Cada ${names[unit] || unit}` : `Cada ${interval} ${names[unit] || unit}s`;
+    return `${cadence} hasta el ${r.untilISO}`;
+  }
+
   if (unit === "week"  && interval === 1) return "Semanal";
   if (unit === "month" && interval === 1 && r.mode === "dayOfMonth" && Number.isFinite(r.dayOfMonth)) {
     return `Cada mes el día ${r.dayOfMonth}`;
   }
   if (unit === "month" && interval === 1) return "Mensual";
   if (unit === "month" && interval === 6) return "Semestral";
+
   if (unit === "year"  && interval === 1) return "Anual";
 
   if (unit === "month" && r.mode === "dayOfMonth" && Number.isFinite(r.dayOfMonth)) {
@@ -1522,6 +1532,9 @@ function readModalPayload() {
     const n = recurrence.interval;
     if (!["day","week","month","year"].includes(u)) problems.push("Repetición inválida (unidad).");
     if (!Number.isFinite(n) || n < 1 || n > 100) problems.push("Repetición inválida (intervalo).");
+    if (recurrence.untilISO && (!/^\d{4}-\d{2}-\d{2}$/.test(recurrence.untilISO) || recurrence.untilISO < dateISO)) {
+      problems.push("La fecha final debe ser igual o posterior a la fecha del evento.");
+    }
     if (u === "month" && recurrence.mode === "dayOfMonth") {
       if (!Number.isFinite(recurrence.dayOfMonth) || recurrence.dayOfMonth < 1 || recurrence.dayOfMonth > 31) {
         problems.push("El día del mes para la repetición es inválido.");
@@ -1675,6 +1688,7 @@ let $recUI = {
   unit: null,
   monthlyMode: null,
   dayOfMonth: null,
+  until: null,
   summary: null,
   hint: null
 };
@@ -1693,6 +1707,7 @@ function ensureRecurrenceSectionUI() {
     $recUI.unit = existing.querySelector("#recProUnit");
     $recUI.monthlyMode = existing.querySelector("#recProMonthlyMode");
     $recUI.dayOfMonth = existing.querySelector("#recProDayOfMonth");
+    $recUI.until = existing.querySelector("#recProUntil");
     $recUI.summary = existing.querySelector("#recProSummary");
     $recUI.hint = existing.querySelector("#recProHint");
     bindRecurrenceUIOnce();
@@ -1756,6 +1771,11 @@ function ensureRecurrenceSectionUI() {
             </label>
           </div>
 
+          <label class="recurrence-pro-inline">
+            <span class="muted">Hasta</span>
+            <input id="recProUntil" type="date" aria-label="Repetir hasta esta fecha" />
+          </label>
+
           <div class="recurrence-pro-hint muted" id="recProHint"></div>
         </div>
 
@@ -1776,6 +1796,7 @@ function ensureRecurrenceSectionUI() {
   $recUI.unit = wrap.querySelector("#recProUnit");
   $recUI.monthlyMode = wrap.querySelector("#recProMonthlyMode");
   $recUI.dayOfMonth = wrap.querySelector("#recProDayOfMonth");
+  $recUI.until = wrap.querySelector("#recProUntil");
   $recUI.summary = wrap.querySelector("#recProSummary");
   $recUI.hint = wrap.querySelector("#recProHint");
 
@@ -1829,6 +1850,7 @@ function bindRecurrenceUIOnce() {
   $recUI.unit?.addEventListener("change", updateFromAdvanced);
   $recUI.monthlyMode?.addEventListener("change", updateFromAdvanced);
   $recUI.dayOfMonth?.addEventListener("input", updateFromAdvanced);
+  $recUI.until?.addEventListener("change", updateFromAdvanced);
 
   if ($eventDate && !$eventDate._recDateBound) {
     $eventDate.addEventListener("change", () => {
@@ -1859,16 +1881,17 @@ function readAdvancedRecurrence() {
 
   const interval = clampInt($recUI.every.value, 1, 100, 1);
   const unit = String($recUI.unit.value || "week").trim();
+  const untilISO = String($recUI.until?.value || "").trim();
 
   if (unit === "month") {
     const monthlyMode = String($recUI.monthlyMode?.value || "sameDate").trim();
     if (monthlyMode === "dayOfMonth") {
       const dayOfMonth = clampInt($recUI.dayOfMonth?.value, 1, 31, getEventDateDayOfMonth());
-      return normalizeRecurrence({ unit, interval, mode: "dayOfMonth", dayOfMonth });
+      return normalizeRecurrence({ unit, interval, mode: "dayOfMonth", dayOfMonth, untilISO });
     }
   }
 
-  return normalizeRecurrence({ unit, interval });
+  return normalizeRecurrence({ unit, interval, untilISO });
 }
 
 function updateRecurrenceSummary() {
@@ -1969,6 +1992,7 @@ function syncAdvancedRecUI(rec) {
     $recUI.unit.value = "week";
     if ($recUI.monthlyMode) $recUI.monthlyMode.value = "sameDate";
     if ($recUI.dayOfMonth) $recUI.dayOfMonth.value = String(getEventDateDayOfMonth());
+    if ($recUI.until) $recUI.until.value = "";
     return;
   }
 
@@ -1976,6 +2000,7 @@ function syncAdvancedRecUI(rec) {
   $controls?.classList.remove("hidden");
   $recUI.every.value = String(r.interval || 1);
   $recUI.unit.value = r.unit || "week";
+  if ($recUI.until) $recUI.until.value = r.untilISO || "";
 
   const isMonth = r.unit === "month";
   $monthCfg?.classList.toggle("hidden", !isMonth);
@@ -2472,10 +2497,11 @@ function expandInterval(ev, startISO, fromISO, toISO, rec) {
   const startD = isoToDate(startISO);
   const fromD = isoToDate(fromISO);
   const toD   = isoToDate(toISO);
+  const untilD = rec?.untilISO ? isoToDate(rec.untilISO) : null;
 
   let cur = new Date(startD);
   let guard = 0;
-  while (cur <= toD && guard < 5000) {
+  while (cur <= toD && (!untilD || cur <= untilD) && guard < 5000) {
     const iso = toISODateLocal(cur);
     if (cur >= fromD) res.push(makeVirtualOccurrence(ev, iso));
     cur = addByRecurrence(cur, rec, startD);

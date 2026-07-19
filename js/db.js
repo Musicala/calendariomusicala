@@ -601,6 +601,8 @@ function normalizeRecurrence(raw) {
         normalized.dayOfMonth = dayOfMonth;
       }
     }
+    const untilISO = normalizeISODate(raw.untilISO ?? raw.endDate ?? raw.recurrenceEnd ?? "");
+    if (untilISO && isValidISODate(untilISO)) normalized.untilISO = untilISO;
     return normalized;
   }
   return null;
@@ -614,6 +616,7 @@ function sanitizeRecurrenceForStorage(raw) {
     out.mode = "dayOfMonth";
     out.dayOfMonth = rec.dayOfMonth;
   }
+  if (rec.untilISO) out.untilISO = rec.untilISO;
   return out;
 }
 
