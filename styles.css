@@ -1255,10 +1255,42 @@ select:-webkit-autofill{
   background: rgba(248,250,252,.9);
   text-align:left;
 }
+.agenda-item.is-done{ opacity:.68; }
+.agenda-item__open{
+  min-width:0;
+  flex:1;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  border:0;
+  background:transparent;
+  padding:0;
+  text-align:left;
+  cursor:pointer;
+  color:inherit;
+}
 .agenda-item:hover{
   border-color: rgba(15,23,42,.18);
   background: rgba(255,255,255,.95);
 }
+.agenda-complete{
+  width:36px;
+  height:36px;
+  flex:0 0 auto;
+  border-radius:12px;
+  border:1px solid rgba(15,23,42,.16);
+  background:#fff;
+  color:var(--mozart);
+  font-size:20px;
+  font-weight:950;
+  cursor:pointer;
+}
+.agenda-complete:hover{ border-color:var(--mozart); background:rgba(12,65,196,.06); }
+.agenda-section-title{ margin:4px 2px 2px; font-size:12px; font-weight:950; color:var(--ink); }
+.agenda-done{ margin-top:8px; }
+.agenda-done summary{ cursor:pointer; font-weight:900; color:var(--muted); }
+.agenda-done__list{ display:flex; flex-direction:column; gap:8px; margin-top:8px; }
 
 .agenda-main{ min-width:0; }
 .agenda-title{

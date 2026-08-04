@@ -50,6 +50,7 @@ import { saveCatalogSettings } from "./db.js";
 import {
   buildMonthGrid,
   formatMonthTitle,
+  formatFullDate,
   isSameMonth,
   isSameDay,
   toISODateLocal,
@@ -546,12 +547,8 @@ export function initUI({ onNavigate, onCreate, onUpdate, onUpdateSeries, onDelet
 
       const dayCell = e.target.closest("[data-date]");
       if (dayCell) {
-        if (!UI_STATE.canWrite) {
-          notify("Modo solo lectura.", { mode: "toast", ms: 1400 });
-          return;
-        }
         const dateISO = dayCell.getAttribute("data-date");
-        openModalForNew(dateISO);
+        openDayAgenda(dateISO);
       }
     });
 
@@ -1475,6 +1472,8 @@ function openModalForNew(dateISO, prefillFromEvent = null) {
   openModal();
   ensureModalEnhancements();
 
+  $eventForm.hidden = false;
+
   setTimeout(() => $eventTitle?.focus(), 0);
 }
 
@@ -1502,7 +1501,44 @@ function openModalForEdit(ev) {
   openModal();
   ensureModalEnhancements();
 
+  $eventForm.hidden = false;
+
   setTimeout(() => $eventTitle?.focus(), 0);
+}
+
+function openDayAgenda(dateISO) {
+  if (!UI_STATE.canWrite) {
+    notify("Puedes consultar los pendientes, pero no crear ni marcar cambios en modo solo lectura.", { mode: "toast", ms: 1800 });
+  }
+
+  // Reutiliza el modal existente como una bandeja enfocada en el día, sin
+  // obligar al docente a abrir primero el formulario de un evento nuevo.
+  const iso = String(dateISO || "").trim();
+  const baseCat = getDefaultWritableCategoryId();
+  UI_STATE.editingId = null;
+  UI_STATE.modalSourceOccurrence = null;
+  populateAssignedToModal(UI_STATE.rawEvents);
+  populateRecurrenceSelect();
+  ensureRecurrenceSectionUI();
+  if ($eventTitle) $eventTitle.value = "";
+  if ($eventCategory) $eventCategory.value = baseCat;
+  if ($eventDate) $eventDate.value = iso;
+  if ($eventStatus) $eventStatus.value = "pending";
+  if ($eventNotes) $eventNotes.value = "";
+  if ($eventAssignedTo) $eventAssignedTo.value = "";
+  setRecurrenceControlsValue(null);
+  hide($btnDeleteEvent);
+  openModal();
+  ensureModalEnhancements();
+
+  const modalContent = $eventModal?.querySelector(".modal-content");
+  const agenda = modalContent?.querySelector("#dayAgendaWrap");
+  const agendaButton = modalContent?.querySelector("#btnViewDayAgenda");
+  if ($modalTitle) $modalTitle.textContent = "Pendientes del día";
+  if ($eventForm) $eventForm.hidden = true;
+  agendaButton?.classList.add("hidden");
+  agenda?.classList.remove("hidden");
+  renderDayAgenda(iso);
 }
 
 function readModalPayload() {
@@ -2062,6 +2098,7 @@ function buildDayAgendaUI(modalContent) {
       <div class="day-agenda-head">
         <div class="day-agenda-title">Eventos del día</div>
         <div class="day-agenda-actions">
+          <button type="button" id="btnAgendaNew" class="btn primary tiny">Nuevo pendiente</button>
           <button type="button" id="btnAgendaToday" class="btn ghost tiny">Hoy</button>
           <button type="button" id="btnAgendaClose" class="btn ghost tiny">Cerrar</button>
         </div>
@@ -2096,7 +2133,11 @@ function renderDayAgenda(dateISO) {
   const all = (UI_STATE.events || []).filter(ev => String(ev.dateISO || "") === iso);
   all.sort(sortAgendaEvents);
 
-  meta.textContent = iso ? `${iso} · ${all.length} evento${all.length === 1 ? "" : "s"}` : "";
+  const pending = all.filter(ev => (ev.status || "pending") === "pending");
+  const done = all.filter(ev => ev.status === "done");
+  meta.textContent = iso
+    ? `${formatFullDate(new Date(`${iso}T12:00:00`))} · ${pending.length} pendiente${pending.length === 1 ? "" : "s"}${done.length ? ` · ${done.length} realizado${done.length === 1 ? "" : "s"}` : ""}`
+    : "";
 
   if (!iso) {
     list.innerHTML = `<div class="muted">Elige una fecha para ver la agenda.</div>`;
@@ -2107,7 +2148,7 @@ function renderDayAgenda(dateISO) {
     return;
   }
 
-  list.innerHTML = all.map(ev => {
+  const renderAgendaItem = (ev) => {
     const title = escapeHtml(ev.title || "(Sin título)");
     const cat = escapeHtml(catLabel(ev.category));
     const who = escapeHtml(String(ev.assignedTo || "").trim() || "Sin asignar");
@@ -2115,7 +2156,8 @@ function renderDayAgenda(dateISO) {
     const rec = ev._virtualFromId ? `<span class="agenda-pill rec">Recurrente</span>` : "";
 
     return `
-      <button type="button" class="agenda-item" data-agenda-id="${escapeHtml(ev.id)}">
+      <article class="agenda-item ${ev.status === "done" ? "is-done" : ""}">
+        <button type="button" class="agenda-item__open" data-agenda-id="${escapeHtml(ev.id)}">
         <div class="agenda-main">
           <div class="agenda-title">${title}</div>
           <div class="agenda-sub">
@@ -2126,12 +2168,27 @@ function renderDayAgenda(dateISO) {
           </div>
         </div>
         <div class="agenda-arrow" aria-hidden="true">›</div>
-      </button>
+        </button>
+        ${UI_STATE.canWrite && ev.status !== "cancelled" ? `<button type="button" class="agenda-complete" data-agenda-toggle="${escapeHtml(ev.id)}" aria-label="${ev.status === "done" ? "Volver a pendiente" : "Marcar realizado"}" title="${ev.status === "done" ? "Volver a pendiente" : "Marcar realizado"}">${ev.status === "done" ? "✓" : "○"}</button>` : ""}
+      </article>
     `;
-  }).join("");
+  };
+
+  list.innerHTML = `
+    ${pending.length ? `<div class="agenda-section-title">Pendientes (${pending.length})</div>${pending.map(renderAgendaItem).join("")}` : '<div class="muted">No hay pendientes para este día. ✨</div>'}
+    ${done.length ? `<details class="agenda-done"><summary>Realizados (${done.length})</summary><div class="agenda-done__list">${done.map(renderAgendaItem).join("")}</div></details>` : ""}
+  `;
 
   if (!list._agendaBound) {
     list.addEventListener("click", (e) => {
+      const toggle = e.target.closest("[data-agenda-toggle]");
+      if (toggle) {
+        e.preventDefault();
+        e.stopPropagation();
+        quickToggleDone(toggle.getAttribute("data-agenda-toggle"));
+        setTimeout(() => renderDayAgenda($eventDate?.value || ""), 0);
+        return;
+      }
       const btn = e.target.closest("[data-agenda-id]");
       if (!btn) return;
       const id = btn.getAttribute("data-agenda-id");
@@ -2162,6 +2219,7 @@ function ensureModalEnhancements() {
   const btnView = modalContent.querySelector("#btnViewDayAgenda");
   const btnClose = modalContent.querySelector("#btnAgendaClose");
   const btnToday = modalContent.querySelector("#btnAgendaToday");
+  const btnNew = modalContent.querySelector("#btnAgendaNew");
 
   if (btnView && !btnView._agendaBound) {
     btnView.addEventListener("click", () => {
@@ -2185,6 +2243,19 @@ function ensureModalEnhancements() {
       wrap?.classList.remove("hidden");
     });
     btnToday._agendaBound = true;
+  }
+
+  if (btnNew && !btnNew._agendaBound) {
+    btnNew.addEventListener("click", () => {
+      if (!UI_STATE.canWrite) {
+        notify("Modo solo lectura: no puedes crear eventos.", { mode: "toast", ms: 1400 });
+        return;
+      }
+      if ($eventForm) $eventForm.hidden = false;
+      if ($modalTitle) $modalTitle.textContent = "Nuevo pendiente";
+      $eventTitle?.focus();
+    });
+    btnNew._agendaBound = true;
   }
 
   if ($eventDate && !($eventDate._agendaBound)) {
