@@ -201,17 +201,25 @@ service cloud.firestore {
         && request.resource.data.category is string
         && categoryWritable(request.resource.data.category);
 
-      // Actualizar: debe poder escribir tanto la categoría anterior como la nueva.
-      allow update: if isActive()
-        && request.resource.data.category is string
-        && resource.data.category is string
-        && categoryWritable(resource.data.category)
-        && categoryWritable(request.resource.data.category);
+      // Actualizar: admins pueden SIEMPRE (así arreglan eventos heredados con
+      // categoría vacía/rota). Los demás: deben poder escribir tanto la
+      // categoría anterior como la nueva.
+      allow update: if isAdminRole()
+        || (
+          isActive()
+          && request.resource.data.category is string
+          && resource.data.category is string
+          && categoryWritable(resource.data.category)
+          && categoryWritable(request.resource.data.category)
+        );
 
-      // Borrar: según la categoría existente.
-      allow delete: if isActive()
-        && resource.data.category is string
-        && categoryWritable(resource.data.category);
+      // Borrar: admins pueden SIEMPRE; los demás según la categoría existente.
+      allow delete: if isAdminRole()
+        || (
+          isActive()
+          && resource.data.category is string
+          && categoryWritable(resource.data.category)
+        );
     }
 
     /* =========================================================================
