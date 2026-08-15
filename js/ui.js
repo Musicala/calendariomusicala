@@ -508,7 +508,13 @@ export function initUI({ onNavigate, onCreate, onUpdate, onUpdateSeries, onDelet
       const edited = UI_STATE.rawEvents.find(event => String(event.id) === String(UI_STATE.editingId));
       const parentId = occurrence?._virtualFromId || edited?.recurrenceParentId || (edited?.recurrence ? edited.id : "");
 
-      if (parentId && confirm("¿Deseas aplicar los cambios a toda la serie recurrente?\n\nAceptar: toda la serie.\nCancelar: solo esta ocurrencia.")) {
+      const originalDateISO = String(occurrence?.dateISO || edited?.dateISO || "");
+      const dateChanged = !!originalDateISO && payload.dateISO !== originalDateISO;
+      const seriesQuestion = dateChanged && (occurrence?._virtualFromId || edited?.recurrenceParentId)
+        ? "¿Deseas aplicar los cambios a toda la serie recurrente?\n\nOJO: el cambio de fecha NO se aplica a la serie (mantiene su calendario).\n\nAceptar: toda la serie, sin mover la fecha.\nCancelar: solo esta ocurrencia (sí se mueve de fecha)."
+        : "¿Deseas aplicar los cambios a toda la serie recurrente?\n\nAceptar: toda la serie.\nCancelar: solo esta ocurrencia.";
+
+      if (parentId && confirm(seriesQuestion)) {
         const seriesPayload = (occurrence?._virtualFromId || edited?.recurrenceParentId)
           ? {
               title: payload.title,
@@ -1550,9 +1556,19 @@ function readModalPayload() {
 
   const assignedTo = ($eventAssignedTo?.value || "").trim();
   const recurrence = readRecurrenceFromModal();
-  const recurrenceParentId = UI_STATE.modalSourceOccurrence?._virtualFromId
-    ? String(UI_STATE.modalSourceOccurrence._virtualFromId)
-    : "";
+  const occurrence = UI_STATE.modalSourceOccurrence;
+  const editedEvent = UI_STATE.editingId
+    ? (UI_STATE.rawEvents || []).find(event => String(event.id) === String(UI_STATE.editingId))
+    : null;
+
+  const recurrenceParentId = occurrence?._virtualFromId
+    ? String(occurrence._virtualFromId)
+    : String(editedEvent?.recurrenceParentId || "");
+  // Fecha original de la ocurrencia: se guarda aunque el usuario mueva el
+  // evento a otro día, para que la serie no siga pintándolo en la fecha vieja.
+  const recurrenceOriginISO = occurrence?._virtualFromId
+    ? String(occurrence.dateISO || "")
+    : String(editedEvent?.recurrenceOriginISO || "");
 
   const problems = [];
   if (!title) problems.push("Ponle un título al evento.");
@@ -1586,7 +1602,7 @@ function readModalPayload() {
     return null;
   }
 
-  return { title, category, dateISO, status, notes, assignedTo, recurrence, recurrenceParentId };
+  return { title, category, dateISO, status, notes, assignedTo, recurrence, recurrenceParentId, recurrenceOriginISO };
 }
 
 function openModal() {
@@ -2547,8 +2563,8 @@ function expandRecurringForVisibleRange(rawEvents, year, monthIndex) {
   const seen = new Set();
   const materializedKeys = new Set(
     events
-      .filter(e => e.recurrenceParentId && e.dateISO)
-      .map(e => `${e.recurrenceParentId}::${e.dateISO}`)
+      .filter(e => e.recurrenceParentId && (e.recurrenceOriginISO || e.dateISO))
+      .map(e => `${e.recurrenceParentId}::${e.recurrenceOriginISO || e.dateISO}`)
   );
   const cleaned = [];
   for (const e of out) {
@@ -2633,7 +2649,8 @@ function makeVirtualOccurrence(ev, dateISO) {
     id: `${ev.id}__v__${dateISO}`,
     dateISO,
     _virtualFromId: ev.id,
-    recurrenceParentId: ev.id
+    recurrenceParentId: ev.id,
+    recurrenceOriginISO: dateISO
   };
 }
 

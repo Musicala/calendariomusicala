@@ -672,6 +672,16 @@ function extractRecurrenceParentId(input = {}, fallback = {}) {
   return cleanString(raw, "");
 }
 
+// Fecha original de la ocurrencia dentro de la serie. Se conserva aunque el
+// usuario mueva la ocurrencia a otro día, para poder ocultar la ocurrencia
+// virtual que la serie sigue generando en la fecha original.
+function extractRecurrenceOriginISO(input = {}, fallback = {}) {
+  const raw =
+    input.recurrenceOriginISO ?? input.occurrenceOriginISO ??
+    fallback.recurrenceOriginISO ?? fallback.occurrenceOriginISO ?? "";
+  return normalizeISODate(raw);
+}
+
 function extractRecurrenceSkip(input = {}, fallback = {}) {
   if ("recurrenceSkip" in input) return !!input.recurrenceSkip;
   if ("skipRecurrence" in input) return !!input.skipRecurrence;
@@ -695,6 +705,7 @@ function normalizeEventInputStrict(input = {}) {
   const assignedTo = extractAssignedTo(input, {});
   const recurrence = extractRecurrence(input, {});
   const recurrenceParentId = extractRecurrenceParentId(input, {});
+  const recurrenceOriginISO = extractRecurrenceOriginISO(input, {});
   const recurrenceSkip = extractRecurrenceSkip(input, {});
 
   if (!title)   throw new Error("El título es obligatorio.");
@@ -702,7 +713,7 @@ function normalizeEventInputStrict(input = {}) {
   if (!dateISO)  throw new Error("La fecha es obligatoria.");
   if (!isValidISODate(dateISO)) throw new Error("Fecha inválida. Usa yyyy-mm-dd.");
 
-  return { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceSkip };
+  return { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceOriginISO, recurrenceSkip };
 }
 
 function normalizeEventInputTolerant(input = {}, fallback = {}) {
@@ -714,6 +725,7 @@ function normalizeEventInputTolerant(input = {}, fallback = {}) {
   const assignedTo = extractAssignedTo(input, fallback);
   const recurrence = extractRecurrence(input, fallback);
   const recurrenceParentId = extractRecurrenceParentId(input, fallback);
+  const recurrenceOriginISO = extractRecurrenceOriginISO(input, fallback);
   const recurrenceSkip = extractRecurrenceSkip(input, fallback);
 
   if (!title)   throw new Error("El título es obligatorio.");
@@ -721,7 +733,7 @@ function normalizeEventInputTolerant(input = {}, fallback = {}) {
   if (!dateISO)  throw new Error("La fecha es obligatoria.");
   if (!isValidISODate(dateISO)) throw new Error("Fecha inválida. Usa yyyy-mm-dd.");
 
-  return { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceSkip };
+  return { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceOriginISO, recurrenceSkip };
 }
 
 function normalizePartialPatch(input = {}, existing = {}) {
@@ -762,6 +774,9 @@ function normalizePartialPatch(input = {}, existing = {}) {
   if ("recurrenceParentId" in input || "seriesParentId" in input || "parentEventId" in input) {
     patch.recurrenceParentId = extractRecurrenceParentId(input, existing) || null;
   }
+  if ("recurrenceOriginISO" in input || "occurrenceOriginISO" in input) {
+    patch.recurrenceOriginISO = extractRecurrenceOriginISO(input, existing) || null;
+  }
   if ("recurrenceSkip" in input || "skipRecurrence" in input) {
     patch.recurrenceSkip = extractRecurrenceSkip(input, existing);
   }
@@ -773,7 +788,7 @@ function normalizePartialPatch(input = {}, existing = {}) {
    CREATE
 ========================= */
 export async function createEvent(input, userEmail) {
-  const { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceSkip } =
+  const { title, category, status, notes, dateISO, assignedTo, recurrence, recurrenceParentId, recurrenceOriginISO, recurrenceSkip } =
     normalizeEventInputStrict(input);
 
   const email = cleanString(userEmail, "");
@@ -782,6 +797,7 @@ export async function createEvent(input, userEmail) {
     title, category, status, notes, assignedTo,
     recurrence:        recurrence || null,
     recurrenceParentId: recurrenceParentId || null,
+    recurrenceOriginISO: recurrenceOriginISO || null,
     recurrenceSkip:    !!recurrenceSkip,
     recurrenceLegacy:  recurrenceToLegacyString(recurrence),
     dateStart:         dateISOToTimestamp(dateISO),
@@ -824,6 +840,7 @@ export async function updateEvent(eventId, input, userEmail) {
     "eventDate" in (input || {}) || "recurrence" in (input || {}) || "repeat" in (input || {}) ||
     "repetition" in (input || {}) || "eventRecurrence" in (input || {}) || "eventRepeat" in (input || {}) ||
     "recurrenceParentId" in (input || {}) || "seriesParentId" in (input || {}) || "parentEventId" in (input || {}) ||
+    "recurrenceOriginISO" in (input || {}) || "occurrenceOriginISO" in (input || {}) ||
     "recurrenceSkip" in (input || {}) || "skipRecurrence" in (input || {});
 
   if (hasKnownPatchField) {
@@ -836,6 +853,7 @@ export async function updateEvent(eventId, input, userEmail) {
       assignedTo: normalized.assignedTo,
       recurrence: normalized.recurrence || null,
       recurrenceParentId: normalized.recurrenceParentId || null,
+      recurrenceOriginISO: normalized.recurrenceOriginISO || null,
       recurrenceSkip: normalized.recurrenceSkip,
       recurrenceLegacy: recurrenceToLegacyString(normalized.recurrence),
       dateISO: normalized.dateISO,
@@ -852,6 +870,7 @@ export async function updateEvent(eventId, input, userEmail) {
     ("assignedTo" in patch && !sameValue(existing.assignedTo, patch.assignedTo)) ||
     ("recurrence" in patch && !sameValue(existing.recurrence, patch.recurrence)) ||
     ("recurrenceParentId" in patch && !sameValue(existing.recurrenceParentId, patch.recurrenceParentId)) ||
+    ("recurrenceOriginISO" in patch && !sameValue(existing.recurrenceOriginISO, patch.recurrenceOriginISO)) ||
     ("recurrenceSkip" in patch && !sameValue(existing.recurrenceSkip, patch.recurrenceSkip));
 
   if (!changed) return { id, ...existing, _skipped: true };
@@ -1133,6 +1152,7 @@ function mapEventDoc(docSnap) {
     assignedTo:      cleanString(data.assignedTo, ""),
     recurrence,
     recurrenceParentId: cleanString(data.recurrenceParentId, ""),
+    recurrenceOriginISO: normalizeISODate(data.recurrenceOriginISO),
     recurrenceSkip: !!data.recurrenceSkip,
     recurrenceLegacy: cleanString(data.recurrenceLegacy, "") || recurrenceToLegacyString(recurrence),
     dateStart,

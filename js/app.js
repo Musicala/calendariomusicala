@@ -171,6 +171,8 @@ export async function materializeRecurringOccurrence(virtualEvent, patch = {}) {
     recurrenceParentId: virtualEvent._virtualFromId,
     recurrenceSkip: false,
     ...patch,
+    // Siempre la fecha original de la ocurrencia, aunque el usuario la mueva.
+    recurrenceOriginISO: virtualEvent.dateISO || "",
     dateISO: patch.dateISO || virtualEvent.dateISO || ""
   };
 
