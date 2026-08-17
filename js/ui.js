@@ -1417,7 +1417,16 @@ async function quickToggleDone(eventId) {
   if (target._virtualFromId) {
     const next = (target.status === "done") ? "pending" : "done";
     try {
-      await UI_STATE.onMaterializeOccurrence?.(target, { status: next });
+      const materialized = await UI_STATE.onMaterializeOccurrence?.(target, { status: next });
+      if (!materialized?.id) throw new Error("No se pudo confirmar la ocurrencia guardada.");
+
+      // El listener de Firestore puede tardar un instante: incorporamos la excepción
+      // recién creada para que el calendario muestre inmediatamente su estado real.
+      UI_STATE.rawEvents = [
+        ...UI_STATE.rawEvents.filter(event => String(event.id) !== String(materialized.id)),
+        materialized
+      ];
+      rerender();
       notify(next === "done" ? "Ocurrencia marcada como hecha ✅" : "Ocurrencia creada como pendiente ◻️", { mode: "toast", ms: 1600 });
     } catch (err) {
       console.error("quickToggleDone materialize error:", err);

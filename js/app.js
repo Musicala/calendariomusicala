@@ -284,11 +284,11 @@ function handleNavigate({ year, monthIndex }) {
 
 async function handleMaterializeOccurrence(virtualEvent, patch = {}) {
   try {
-    await materializeRecurringOccurrence(virtualEvent, patch);
-    toast("Ocurrencia separada ✅");
+    return await materializeRecurringOccurrence(virtualEvent, patch);
   } catch (e) {
     console.error("Materialize occurrence error:", e);
     alert(e?.message || "No se pudo separar esta ocurrencia.");
+    throw e;
   }
 }
 
