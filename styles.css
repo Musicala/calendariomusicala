@@ -816,13 +816,43 @@ select:-webkit-autofill{
    Calendar
 ========================= */
 .calendar{
-  margin-top: var(--gap);
   background:var(--panel);
   border:1px solid var(--line);
   border-radius:var(--r);
   box-shadow:var(--shadow);
   overflow:hidden;
 }
+
+.month-workspace{
+  margin-top:var(--gap);
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) minmax(280px, 350px);
+  gap:var(--gap);
+  align-items:start;
+}
+
+.day-tasks-panel{
+  position:sticky;
+  top:14px;
+  max-height:calc(100vh - 28px);
+  overflow:auto;
+  padding:14px;
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:var(--r);
+  box-shadow:var(--shadow2);
+}
+.day-tasks-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.day-tasks-head h3{ margin:2px 0 0; color:var(--bach); font-size:15px; line-height:1.25; text-transform:capitalize; }
+.day-tasks-kicker{ margin:0; color:var(--muted); font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.5px; }
+.day-tasks-meta{ margin:8px 0 0; font-size:12px; }
+.day-tasks-list{ display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+.day-tasks-empty{ padding:16px 8px; color:var(--muted); font-weight:800; font-size:13px; }
+.day-task-item{ display:flex; align-items:center; gap:8px; padding:10px; border:1px solid rgba(15,23,42,.10); border-radius:14px; background:rgba(248,250,252,.9); }
+.day-task-item.is-done{ opacity:.68; }
+.day-task-open{ min-width:0; flex:1; padding:0; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+.day-task-title{ display:block; color:var(--ink); font-weight:950; line-height:1.22; overflow-wrap:anywhere; }
+.day-task-sub{ display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
 
 .calendar-grid{
   display:grid;
@@ -869,6 +899,7 @@ select:-webkit-autofill{
     #fff;
 }
 .day.today .day-num{ color: var(--mozart); }
+.day.selected{ box-shadow:inset 0 0 0 2px var(--mozart); background:rgba(12,65,196,.055); }
 
 .day-top{
   display:flex;
@@ -1835,6 +1866,8 @@ select:-webkit-autofill{
 ========================= */
 @media (max-width: 980px){
   .overview{ grid-template-columns:1fr 1fr; }
+  .month-workspace{ grid-template-columns:1fr; }
+  .day-tasks-panel{ position:static; max-height:none; }
 }
 
 @media (max-width: 640px){

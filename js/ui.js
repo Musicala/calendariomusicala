@@ -92,6 +92,10 @@ const $filterStatus     = qs("#filterStatus");
 const $filterAssignedTo = qs("#filterAssignedTo");
 
 const $calendarGrid = qs("#calendarGrid");
+const $dayTasksTitle = qs("#dayTasksTitle");
+const $dayTasksMeta = qs("#dayTasksMeta");
+const $dayTasksList = qs("#dayTasksList");
+const $btnDayTasksNew = qs("#btnDayTasksNew");
 
 const $eventModal     = qs("#eventModal");
 const $modalOverlay   = qs("#modalOverlay");
@@ -133,6 +137,7 @@ const SEARCH_DEBOUNCE_MS = 180;
 let UI_STATE = {
   year: new Date().getFullYear(),
   monthIndex: new Date().getMonth(),
+  selectedDayISO: toISODateLocal(new Date()),
 
   rawEvents: [],
   categories: getCategories(),
@@ -554,8 +559,27 @@ export function initUI({ onNavigate, onCreate, onUpdate, onUpdateSeries, onDelet
       const dayCell = e.target.closest("[data-date]");
       if (dayCell) {
         const dateISO = dayCell.getAttribute("data-date");
-        openDayAgenda(dateISO);
+        selectDayTasks(dateISO);
       }
+    });
+
+    $dayTasksList?.addEventListener("click", (e) => {
+      const toggle = e.target.closest("[data-day-task-toggle]");
+      if (toggle) {
+        e.preventDefault();
+        e.stopPropagation();
+        quickToggleDone(toggle.getAttribute("data-day-task-toggle"));
+        return;
+      }
+      handleEventOpenClick(e.target);
+    });
+
+    $btnDayTasksNew?.addEventListener("click", () => {
+      if (!UI_STATE.canWrite) {
+        notify("Modo solo lectura: no puedes crear tareas.", { mode: "toast", ms: 1400 });
+        return;
+      }
+      openModalForNew(UI_STATE.selectedDayISO || toISODateLocal(new Date()));
     });
 
     $listBody?.addEventListener("click", (e) => {
@@ -750,6 +774,7 @@ function rerender() {
   });
   renderOverview();
   renderCalendar(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
+  renderDayTasksPanel();
 
   if (UI_STATE.view === "list") renderList(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
 }
@@ -955,6 +980,7 @@ export function renderCalendar(year, monthIndex, events = []) {
     cell.className = "day";
     if (!inMonth) cell.classList.add("muted");
     if (isTodayCell) cell.classList.add("today");
+    if (dateISO === UI_STATE.selectedDayISO) cell.classList.add("selected");
     cell.setAttribute("data-date", dateISO);
 
     const top = document.createElement("div");
@@ -1351,7 +1377,6 @@ function renderChip(ev) {
 
   const cat = ev.category || "otro";
   const st  = ev.status || "pending";
-  const who = (ev.assignedTo || "").trim();
   const recLabel = recurrenceLabel(ev.recurrence);
 
   chip.style.borderLeftColor = catColor(cat);
@@ -1360,7 +1385,6 @@ function renderChip(ev) {
 
   const titleBits = [
     `${catLabel(cat)} · ${statusLabel(st)}${recLabel ? ` · ${recLabel}` : ""}`,
-    who ? `@${who}` : "",
     ev._virtualFromId ? "Ocurrencia (no guardada)" : "",
     ev.notes ? ev.notes : ""
   ].filter(Boolean).join(" · ");
@@ -1372,12 +1396,66 @@ function renderChip(ev) {
   chip.innerHTML = `
     <span class="chip-dot" style="color:${STATUS_COLORS[st] || "#64748B"}">${escapeHtml(st === "done" ? "✓" : (st === "cancelled" ? "×" : "•"))}</span>
     <span class="chip-text">${escapeHtml(ev.title || "(Sin título)")}</span>
-    ${who ? `<span class="chip-person">@${escapeHtml(who)}</span>` : ""}
     ${check}
   `;
 
   applyHoverCardAttrs(chip, ev);
   return chip;
+}
+
+/* =========================
+   Panel lateral: tareas del día seleccionado
+========================= */
+function selectDayTasks(dateISO) {
+  const iso = String(dateISO || "").trim();
+  if (!iso) return;
+  UI_STATE.selectedDayISO = iso;
+  renderCalendar(UI_STATE.year, UI_STATE.monthIndex, UI_STATE.events);
+  renderDayTasksPanel();
+}
+
+function renderDayTasksPanel() {
+  if (!$dayTasksTitle || !$dayTasksMeta || !$dayTasksList) return;
+
+  const iso = String(UI_STATE.selectedDayISO || "").trim();
+  const all = applyFilters(UI_STATE.events)
+    .filter(ev => String(ev.dateISO || "") === iso)
+    .slice()
+    .sort(sortAgendaEvents);
+  const pending = all.filter(ev => (ev.status || "pending") === "pending");
+  const done = all.filter(ev => ev.status === "done");
+
+  $dayTasksTitle.textContent = iso
+    ? formatFullDate(new Date(`${iso}T12:00:00`))
+    : "Tareas del día";
+  $dayTasksMeta.textContent = iso
+    ? `${pending.length} pendiente${pending.length === 1 ? "" : "s"}${done.length ? ` · ${done.length} realizada${done.length === 1 ? "" : "s"}` : ""}`
+    : "";
+  $btnDayTasksNew?.classList.toggle("hidden", !UI_STATE.canWrite);
+
+  if (!iso || !all.length) {
+    $dayTasksList.innerHTML = `<div class="day-tasks-empty">${iso ? "No hay tareas para este día." : "Selecciona un día para ver sus tareas."}</div>`;
+    return;
+  }
+
+  const item = (ev) => {
+    const doneClass = ev.status === "done" ? " is-done" : "";
+    const status = escapeHtml(statusLabel(ev.status));
+    const recurrence = ev._virtualFromId ? `<span class="agenda-pill rec">Recurrente</span>` : "";
+    return `
+      <article class="day-task-item${doneClass}">
+        <button type="button" class="day-task-open" data-event-id="${escapeHtml(ev.id)}">
+          <span class="day-task-title">${escapeHtml(ev.title || "(Sin título)")}</span>
+          <span class="day-task-sub"><span class="agenda-pill">${escapeHtml(catLabel(ev.category))}</span><span class="agenda-pill status">${status}</span>${recurrence}</span>
+        </button>
+        ${UI_STATE.canWrite && ev.status !== "cancelled" ? `<button type="button" class="agenda-complete" data-day-task-toggle="${escapeHtml(ev.id)}" aria-label="${ev.status === "done" ? "Volver a pendiente" : "Marcar realizada"}" title="${ev.status === "done" ? "Volver a pendiente" : "Marcar realizada"}">${ev.status === "done" ? "✓" : "○"}</button>` : ""}
+      </article>`;
+  };
+
+  $dayTasksList.innerHTML = `
+    ${pending.length ? `<div class="agenda-section-title">Pendientes (${pending.length})</div>${pending.map(item).join("")}` : ""}
+    ${done.length ? `<details class="agenda-done"><summary>Realizadas (${done.length})</summary><div class="agenda-done__list">${done.map(item).join("")}</div></details>` : ""}
+    ${!pending.length && !done.length ? `<div class="day-tasks-empty">No hay tareas para este día.</div>` : ""}`;
 }
 
 function renderQuickToggleHTML(ev, { small = false } = {}) {

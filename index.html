@@ -321,21 +321,37 @@
 
     <!-- Vista Mes -->
     <section
-      class="calendar"
+      class="month-workspace"
       id="monthView"
       role="tabpanel"
       aria-labelledby="btnViewMonth"
-      aria-label="Calendario mensual"
+      aria-label="Calendario mensual y tareas del día"
     >
-      <div
-        class="calendar-grid"
-        id="calendarGrid"
-        role="grid"
-        aria-label="Cuadrícula del calendario"
-        aria-readonly="true"
-      >
-        <!-- render por JS -->
+      <div class="calendar">
+        <div
+          class="calendar-grid"
+          id="calendarGrid"
+          role="grid"
+          aria-label="Cuadrícula del calendario"
+          aria-readonly="true"
+        >
+          <!-- render por JS -->
+        </div>
       </div>
+
+      <aside class="day-tasks-panel" aria-labelledby="dayTasksTitle">
+        <div class="day-tasks-head">
+          <div>
+            <p class="day-tasks-kicker">Agenda seleccionada</p>
+            <h3 id="dayTasksTitle">Tareas del día</h3>
+          </div>
+          <button type="button" class="btn primary tiny" id="btnDayTasksNew">Nueva tarea</button>
+        </div>
+        <p id="dayTasksMeta" class="day-tasks-meta muted" aria-live="polite"></p>
+        <div id="dayTasksList" class="day-tasks-list" aria-live="polite">
+          <span class="muted">Selecciona un día para ver sus tareas.</span>
+        </div>
+      </aside>
     </section>
 
     <!-- Vista Lista -->
