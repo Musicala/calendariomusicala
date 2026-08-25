@@ -92,6 +92,7 @@ const $filterStatus     = qs("#filterStatus");
 const $filterAssignedTo = qs("#filterAssignedTo");
 
 const $calendarGrid = qs("#calendarGrid");
+const $dayTasksPanel = qs(".day-tasks-panel");
 const $dayTasksTitle = qs("#dayTasksTitle");
 const $dayTasksMeta = qs("#dayTasksMeta");
 const $dayTasksList = qs("#dayTasksList");
@@ -137,7 +138,7 @@ const SEARCH_DEBOUNCE_MS = 180;
 let UI_STATE = {
   year: new Date().getFullYear(),
   monthIndex: new Date().getMonth(),
-  selectedDayISO: toISODateLocal(new Date()),
+  selectedDayISO: "",
 
   rawEvents: [],
   categories: getCategories(),
@@ -1418,6 +1419,10 @@ function renderDayTasksPanel() {
   if (!$dayTasksTitle || !$dayTasksMeta || !$dayTasksList) return;
 
   const iso = String(UI_STATE.selectedDayISO || "").trim();
+  if ($dayTasksPanel) $dayTasksPanel.hidden = !iso;
+  $monthView?.classList.toggle("has-selected-day", Boolean(iso));
+  if (!iso) return;
+
   const all = applyFilters(UI_STATE.events)
     .filter(ev => String(ev.dateISO || "") === iso)
     .slice()
