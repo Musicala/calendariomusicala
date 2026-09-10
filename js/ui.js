@@ -195,9 +195,9 @@ if (typeof window !== "undefined" && !window.__uiAuthBound) {
     // Categorías que el rol puede VER (para filtrar el dropdown de filtro y la leyenda).
     UI_STATE.allowedCategories = Array.isArray(d.allowedCategories) ? d.allowedCategories : [];
     UI_STATE.isAdmin = !!d.isAdmin;
-    if (typeof d.canWrite === "boolean") {
-      UI_STATE.canWrite = d.canWrite;
-    }
+    // La posibilidad de abrir el formulario también debe respetar la misma
+    // intersección: no basta con tener write sobre una categoría oculta.
+    UI_STATE.canWrite = UI_STATE.isAdmin || getVisibleWritableCategoryIds().length > 0;
     populateCategorySelects();
     applyPermissionGates();
     rerender();
@@ -224,12 +224,22 @@ function statusLabel(id) {
   return EVENT_STATUS.find(s => s.id === id)?.label || id || "Pendiente";
 }
 
-/* Primera categoría que el rol puede EDITAR (write). Se usa como valor por
-   defecto del formulario de evento, para no preseleccionar una categoría que
-   el rol no puede crear (p. ej. "Administrativo" para una asesora). */
+/* Una categoría asignable debe estar autorizada tanto para VER como para
+   EDITAR. La intersección vuelve a proteger la UI si una matriz guardada por
+   error contiene write fuera de read. */
+function getVisibleWritableCategoryIds() {
+  const readable = Array.isArray(UI_STATE.allowedCategories) ? UI_STATE.allowedCategories : [];
+  const writable = Array.isArray(UI_STATE.writeCategories) ? UI_STATE.writeCategories : [];
+  const readableSet = new Set(readable);
+  return writable.filter(id => readableSet.has(id));
+}
+
+/* Primera categoría que el rol puede VER y EDITAR. Se usa como valor por
+   defecto del formulario para no preseleccionar una categoría que luego quede
+   oculta para la asesora. */
 function getDefaultWritableCategoryId() {
   const cats = Array.isArray(UI_STATE.categories) ? UI_STATE.categories : getCategories();
-  const writable = Array.isArray(UI_STATE.writeCategories) ? UI_STATE.writeCategories : [];
+  const writable = getVisibleWritableCategoryIds();
   if (writable.length > 0) {
     const first = cats.find(c => writable.includes(c.id));
     if (first) return first.id;
@@ -1665,6 +1675,9 @@ function readModalPayload() {
   const problems = [];
   if (!title) problems.push("Ponle un título al evento.");
   if (!category) problems.push("Elige una categoría.");
+  if (category && !UI_STATE.isAdmin && !getVisibleWritableCategoryIds().includes(category)) {
+    problems.push("Solo puedes asignar categorías que puedes ver y editar.");
+  }
   if (!dateISO) problems.push("Elige una fecha.");
 
   if (dateISO && !/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) {
@@ -2460,7 +2473,7 @@ function populateCategorySelects() {
     // asesora no ve categorías ajenas (p. ej. "Administrativo") que no puede
     // ver, editar ni agregar, y no se confunde. Dirección las tiene todas.
     const readable = Array.isArray(UI_STATE.allowedCategories) ? UI_STATE.allowedCategories : [];
-    const restrictFilter = readable.length > 0;
+    const restrictFilter = !UI_STATE.isAdmin;
     for (const c of (UI_STATE.categories || getCategories())) {
       if (restrictFilter && !readable.includes(c.id)) continue;
       const opt = document.createElement("option");
@@ -2477,10 +2490,12 @@ function populateCategorySelects() {
   if ($eventCategory) {
     const prev = $eventCategory.value || "";
     // El formulario de crear/editar solo ofrece categorías que el rol puede
-    // EDITAR (coincide con lo que permiten las reglas de Firestore). Dirección
-    // tiene todas en su lista, así que no se le filtra ninguna.
-    const writable = Array.isArray(UI_STATE.writeCategories) ? UI_STATE.writeCategories : [];
-    const restrict = writable.length > 0;
+    // VER y EDITAR. Dirección tiene acceso total. La intersección coincide con
+    // las reglas de Firestore y evita asignar un evento que luego no verá.
+    const writable = UI_STATE.isAdmin
+      ? (UI_STATE.categories || getCategories()).map(c => c.id)
+      : getVisibleWritableCategoryIds();
+    const restrict = !UI_STATE.isAdmin;
     $eventCategory.innerHTML = "";
     for (const c of (UI_STATE.categories || getCategories())) {
       if (restrict && !writable.includes(c.id)) continue;

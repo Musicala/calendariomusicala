@@ -110,6 +110,12 @@ service cloud.firestore {
       return isAdminRole() ? true
         : accessExists() ? (c in permRead(role())) : defaultCanRead(role(), c);
     }
+    // Nadie debe poder crear o mover un evento a una categoría que no puede
+    // ver. Esto protege incluso si la matriz de permisos quedara mal
+    // configurada (write fuera de read) o si alguien altera el cliente.
+    function categoryAssignable(c) {
+      return categoryWritable(c) && categoryReadable(c);
+    }
 
     /* =========================================================================
        USERS
@@ -199,7 +205,7 @@ service cloud.firestore {
       // Crear: según la categoría del nuevo evento.
       allow create: if isActive()
         && request.resource.data.category is string
-        && categoryWritable(request.resource.data.category);
+        && categoryAssignable(request.resource.data.category);
 
       // Actualizar: admins pueden SIEMPRE (así arreglan eventos heredados con
       // categoría vacía/rota). Los demás: deben poder escribir tanto la
@@ -209,8 +215,8 @@ service cloud.firestore {
           isActive()
           && request.resource.data.category is string
           && resource.data.category is string
-          && categoryWritable(resource.data.category)
-          && categoryWritable(request.resource.data.category)
+          && categoryAssignable(resource.data.category)
+          && categoryAssignable(request.resource.data.category)
         );
 
       // Borrar: admins pueden SIEMPRE; los demás según la categoría existente.
@@ -218,7 +224,7 @@ service cloud.firestore {
         || (
           isActive()
           && resource.data.category is string
-          && categoryWritable(resource.data.category)
+          && categoryAssignable(resource.data.category)
         );
     }
 
