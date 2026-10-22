@@ -11,7 +11,7 @@
       ✅ filtra consultas por allowedCategories (RBAC cliente)
 ============================================================================= */
 
-import { initUI, setEvents, setMonth, getCurrentView, setCatalogData, setUrgentTaskContext, setUrgentTasks, notify } from "./ui.js";
+import { initUI, setEvents, setMonth, getCurrentView, setCatalogData, setUrgentTaskContext, setUrgentTasks, notify } from "./ui.js?v=20261022";
 import { createEvent, updateEvent, updateEventSeries, softDeleteEvent, softDeleteEventSeries, subscribeEventsInRange, getCatalogSettings, subscribeUrgentTasks, upsertUrgentTask, completeUrgentTask, deleteUrgentTask } from "./db.js";
 import { canUseUrgentTasks, URGENT_TASK_SLOTS } from "./constants.js";
 import { startOfMonth, endOfMonth } from "./utils.js";

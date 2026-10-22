@@ -378,9 +378,9 @@ function recurrenceLabel(rec) {
   };
 
   if (r.untilISO) {
-    const names = { day: "día", week: "semana", month: "mes", year: "año" };
-    const cadence = interval === 1 ? `Cada ${names[unit] || unit}` : `Cada ${interval} ${names[unit] || unit}s`;
-    return `${cadence} hasta el ${r.untilISO}`;
+    const cadence = recurrenceLabel({ ...r, untilISO: "" });
+    const untilLabel = r.untilISO.split("-").reverse().join("/");
+    return `${cadence} hasta el ${untilLabel}`;
   }
 
   if (unit === "week"  && interval === 1) return "Semanal";
@@ -1889,62 +1889,62 @@ function ensureRecurrenceSectionUI() {
     <div class="recurrence-pro-grid">
       <div class="recurrence-pro-left">
         <div class="recurrence-pro-field">
-          <div class="recurrence-pro-label">Preset</div>
+          <label class="recurrence-pro-label" for="eventRecurrence">Frecuencia</label>
           <div class="recurrence-pro-control" data-rec-pro-anchor></div>
-          <div class="recurrence-pro-help muted">Puedes usar un preset o personalizar abajo.</div>
+          <div class="recurrence-pro-help muted">Elige una frecuencia o ajusta los detalles abajo.</div>
         </div>
       </div>
 
       <div class="recurrence-pro-right">
         <label class="recurrence-pro-toggle">
           <input type="checkbox" id="recProToggle" />
-          <span>Repetir</span>
+          <span>Repetir evento</span>
         </label>
+      </div>
 
-        <div class="recurrence-pro-controls hidden" id="recProControls">
-          <div class="recurrence-pro-every">
-            <span class="muted">Cada</span>
-            <input id="recProEvery" type="number" min="1" max="100" value="1" inputmode="numeric" />
-            <select id="recProUnit">
-              <option value="day">Día(s)</option>
-              <option value="week">Semana(s)</option>
-              <option value="month">Mes(es)</option>
-              <option value="year">Año(s)</option>
-            </select>
-          </div>
-
-          <div class="recurrence-pro-month hidden" id="recProMonthConfig">
-            <label class="recurrence-pro-inline">
-              <span class="muted">En mes:</span>
-              <select id="recProMonthlyMode">
-                <option value="sameDate">Mismo día del evento</option>
-                <option value="dayOfMonth">Día fijo del mes</option>
-              </select>
-            </label>
-
-            <label class="recurrence-pro-inline hidden" id="recProDayWrap">
-              <span class="muted">Día</span>
-              <input id="recProDayOfMonth" type="number" min="1" max="31" value="1" inputmode="numeric" />
-            </label>
-          </div>
-
-          <label class="recurrence-pro-inline">
-            <span class="muted">Hasta</span>
-            <input id="recProUntil" type="date" aria-label="Repetir hasta esta fecha" />
-          </label>
-
-          <div class="recurrence-pro-hint muted" id="recProHint"></div>
+      <div class="recurrence-pro-controls hidden" id="recProControls">
+        <div class="recurrence-pro-every">
+          <label class="muted" for="recProEvery">Cada</label>
+          <input id="recProEvery" type="number" min="1" max="100" value="1" inputmode="numeric" />
+          <select id="recProUnit" aria-label="Unidad de repetición">
+            <option value="day">Día(s)</option>
+            <option value="week">Semana(s)</option>
+            <option value="month">Mes(es)</option>
+            <option value="year">Año(s)</option>
+          </select>
         </div>
 
-        <div class="recurrence-pro-summary" id="recProSummary"></div>
+        <div class="recurrence-pro-month hidden" id="recProMonthConfig">
+          <label class="recurrence-pro-inline">
+            <span class="muted">En mes:</span>
+            <select id="recProMonthlyMode">
+              <option value="sameDate">Mismo día del evento</option>
+              <option value="dayOfMonth">Día fijo del mes</option>
+            </select>
+          </label>
+
+          <label class="recurrence-pro-inline hidden" id="recProDayWrap">
+            <span class="muted">Día</span>
+            <input id="recProDayOfMonth" type="number" min="1" max="31" value="1" inputmode="numeric" />
+          </label>
+        </div>
+
+        <label class="recurrence-pro-inline">
+          <span class="muted">Hasta (opcional)</span>
+          <input id="recProUntil" type="date" aria-label="Repetir hasta esta fecha" />
+        </label>
+
+        <div class="recurrence-pro-hint muted" id="recProHint"></div>
       </div>
+
+      <div class="recurrence-pro-summary" id="recProSummary" role="status" aria-live="polite"></div>
     </div>
   `;
 
   const anchor = wrap.querySelector("[data-rec-pro-anchor]");
   if (anchor) anchor.appendChild($eventRecurrence);
 
-  if (slot) slot.replaceWith(wrap);
+  if (slot) baseRow.replaceChildren(wrap);
   else $eventRecurrence.insertAdjacentElement("afterend", wrap);
 
   $recUI.wrap = wrap;
@@ -2090,7 +2090,7 @@ function populateRecurrenceSelect() {
   const prev = String($eventRecurrence.value || "").trim();
 
   const opts = [
-    { value: "", label: "—" },
+    { value: "", label: "Sin repetición" },
     { value: JSON.stringify({ unit: "day", interval: 1 }),   label: "Diario" },
     { value: JSON.stringify({ unit: "week", interval: 1 }),  label: "Semanal" },
     { value: JSON.stringify({ unit: "week", interval: 2 }),  label: "Cada 2 semanas" },
