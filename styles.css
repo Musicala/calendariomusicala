@@ -1214,6 +1214,39 @@ select:-webkit-autofill{
 .modal-head{
   padding:6px 6px 10px;
 }
+/* Cabecera compacta: texto y cierre comparten fila. */
+#eventModal .modal-head{
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) auto;
+  gap:10px 12px;
+  align-items:start;
+  padding-bottom:14px;
+}
+#eventModal .modal-head-row{ display:contents; }
+#eventModal .modal-head-copy{ min-width:0; }
+#btnCloseModalX{
+  width:44px;
+  min-height:44px;
+  padding:0;
+  display:grid;
+  place-items:center;
+}
+#eventModal .modal-head p{
+  font-size:13px;
+  font-weight:500;
+  line-height:1.45;
+}
+#eventModal .day-agenda-bar{
+  grid-column:1 / -1;
+  justify-content:flex-start;
+  margin-top:0;
+}
+#btnViewDayAgenda{
+  min-height:36px;
+  padding:7px 12px;
+  font-size:12px;
+}
+
 .modal-head h3{
   margin:0 0 6px;
   font-size:16px;
